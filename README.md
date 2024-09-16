@@ -4,7 +4,7 @@ This repo contains code to replicate the figures in Brain Charts for the Rhesus 
 
 Lifespan models were fit using Generalized Additive Models for Location, Scale, and Shape (GAMLSS). A wrapper for the R implementation of GAMLSS was used specifically for modeling age-related brain changes over the lifespan, first built and used by Richard Bethlehem and Jakob Seidlitz for Brain Charts for the Human Lifespan (Bethlehem & Seidlitz, 2022). [See the base code here.](https://github.com/brainchart/Lifespan)
 ![Figure 3](Figure3Images/Figure3.png)
-<br><br><br> <!-- Adds extra space -->
+<p style="margin-bottom: 30px;"></p> <!-- Adds extra space -->
 
 <div style="display: flex; justify-content: space-around;">
   <img src="Figure3Images/LifespanSurfaceImages/volume_curve/growth.gif" alt="Macaque" width="412"/>
