@@ -1,0 +1,616 @@
+This file is for creating supplementary plots for the quality control section of the brain charts paper
+
+```{r}
+source("../../301.functions.r")
+loadEuler <- function(measure, folder) {
+  ## Function to load in the euler index and merging with a working dataframe to get all the demographic data we are working with
+  ## Load in the euler and bind Sex
+  col_classes <- c(Subject = "character", Session = "character")
+  euler <- read.csv("SupplementaryQCData/euler_output.csv", colClasses = col_classes)
+  demo <- read_excel("../../Data/Demographics/demographic_info.xlsx")
+  demo$ID <- paste(demo$Subject, demo$Session, sep = "")
+  euler <- merge(euler, demo[, c("ID", "Sex", "Original_ID")], by="ID")
+  euler <- euler %>%
+    distinct(.keep_all=TRUE) %>%
+    mutate(Subject = ifelse(Site == "site-emory", Original_ID, Subject)) %>%
+    mutate(ID = paste0(Subject, Session))
+  
+  ## Now merge with a measure SUBSET 
+  SUBSET <- readRDS(file.path("../../RDS", folder, measure, "SUBSET.rds"))
+  SUBSET$ID <- paste0(SUBSET$Subject, SUBSET$Session)
+  merge_euler <- euler
+  merge_euler[merge_euler$Site == "site-NKIdev", "ID"] <- paste("051", merge_euler[merge_euler$Site == "site-NKIdev", "ID"], sep="")
+  merge_euler[merge_euler$Site == "site-neurodev", "ID"] <- substr(merge_euler[merge_euler$Site == "site-neurodev", "ID"], 1, 6)
+  SUBSET <- merge(SUBSET, merge_euler[, c("average", "ID")], by="ID")
+  PRIMARY <- list()
+  PRIMARY$SUBSET <- SUBSET ## attached with the euler scores as well
+  PRIMARY$FIT.EXTRACT <- readRDS(file.path("../../RDS", folder, measure, "FIT.EXTRACT.rds"))
+  PRIMARY$MODEL <- readRDS(file.path("../../RDS", folder, measure, "MODEL.rds"))
+  minage <- min(PRIMARY$SUBSET$FakeAge)
+  PRIMARY$CURVE <- Apply.Param(
+    NEWData=PRIMARY$SUBSET,
+    FITParam=PRIMARY$FIT.EXTRACT$param,
+    Add.Normalise=TRUE,
+    Add.Derivative=FALSE
+  )
+  return(PRIMARY)
+}
+
+eulerGMV <- loadEuler("TotalGrayVol", "ASEG.VOLUME.COMBAT")
+eulerWMV <- loadEuler("CorticalWhiteMatterVol", "ASEG.VOLUME.COMBAT")
+eulerSGMV <- loadEuler("SubCortGrayVol", "ASEG.VOLUME.COMBAT")
+eulerVent <- loadEuler("Total.Lateral.Ventricle", "ASEG.VOLUME.COMBAT")
+eulerCerebrum <- loadEuler("BrainSegVolNotVentNoCerebellum", "ASEG.VOLUME.COMBAT")
+eulerMT <- loadEuler("Mean.Thickness", "MARKOV.THICKNESS.COMBAT")
+eulerSA <- loadEuler("Total.Area", "MARKOV.AREA.COMBAT")
+```
+
+## EULER INDEX BY AGE + TEST
+
+```{r}
+library(ggplot2)
+library(patchwork)
+
+crosshairEulerAge <- function(LARGE, sex) {
+  euler <- LARGE$SUBSET
+  summary <- euler %>%
+    mutate(average = abs(average)) %>%
+    group_by(Site) %>%
+    filter(Sex == sex) %>%
+    summarise(
+      median_age=median(Age),
+      median_euler=median(average),
+      sd_age=sd(Age),
+      sd_euler=sd(average)
+    ) %>%
+    filter(complete.cases(.))
+  
+  plot <- ggplot(data=summary, aes(x=median_age, y=median_euler), fill=Site) +
+    geom_point(size=2) +
+    geom_errorbar(
+      aes(ymin=median_euler - sd_euler, ymax=median_euler + sd_euler),
+      width=0.2,
+      position=position_dodge(0.5)
+    ) +
+    geom_errorbarh(
+      aes(xmin=median_age - sd_age, xmax=median_age + sd_age),
+      width=0.2,
+      position=position_dodge(0.5)
+    ) +
+    theme_minimal() +
+    theme(legend.position="none", 
+          axis.line=element_line(),
+          axis.text=element_text(size=12),
+          axis.title=element_text(size=15),
+          plot.title=element_text(size=20)) +
+    xlab("Age (yrs)") +
+    ylab("Euler Index (no. of holes)") +
+    ggtitle(ifelse(sex == "M", "Male", "Female")) +
+    ggeasy::easy_center_title() 
+    #ylim(0, 40)
+  return(plot)
+}
+
+MPlot <- crosshairEulerAge(eulerGMV, "M")
+FPlot <- crosshairEulerAge(eulerGMV, "F")
+plot <- MPlot + FPlot +
+  plot_layout(
+    guides = "collect",
+    axis_titles = "collect"
+  )
+plot
+ggsave(plot=plot, file.path("SupplementaryQCImages/EulerByAge.pdf"), width=10, height=4, dpi=300)
+ggsave(plot=plot, file.path("SupplementaryQCImages/EulerByAge.png"), width=10, height=4, dpi=300)
+
+#### Run linear model to check for age-related bias in Euler plots
+library(lmerTest)
+
+Male <- eulerGMV$SUBSET %>%
+  filter(Sex == "M") %>%
+  group_by(Site) %>%
+  mutate(average = abs(average)) %>%
+  summarise(
+    median_age = median(Age), 
+    median_ei = median(average),
+    sd_age = sd(Age),
+    sd_ei = sd(average)
+    )
+Female <- eulerGMV$SUBSET %>%
+  filter(Sex == "F") %>%
+  group_by(Site) %>%
+  mutate(average = abs(average)) %>%
+  summarise(
+    median_age = median(Age), 
+    median_ei = median(average),
+    sd_age = sd(Age),
+    sd_ei = sd(average)
+    )
+
+cor_test_male_median <- cor.test(Male$median_age, Male$median_ei, method = "spearman")
+cor_test_female_median <- cor.test(Female$median_age, Female$median_ei, method = "spearman")
+cor_test_male_sd <- cor.test(Male$sd_age, Male$sd_ei, method = "spearman")
+cor_test_female_sd <- cor.test(Female$sd_age, Female$sd_ei, method = "spearman")
+print(cor_test_male_median)
+print(cor_test_female_median)
+print(cor_test_male_sd)
+print(cor_test_female_sd)
+
+```
+```{r}
+ei_age_scans_male <- cor.test(male_sub$average, male_sub$Age, method="pearson")
+ei_age_scans_female <- cor.test(female_sub$average, female_sub$Age, method="pearson")
+print(ei_age_scans_male)
+print(ei_age_scans_female)
+```
+
+
+```{r}
+male_sub <- eulerGMV$SUBSET %>%
+  filter(Sex == "M")
+female_sub <- eulerGMV$SUBSET %>%
+  filter(Sex == "F")
+t_test_result <- wilcox.test(abs(male_sub$average), abs(female_sub$average))
+print(t_test_result)
+```
+
+
+
+```{r}
+## Plot euler distribution
+library(ggplot2)
+plotEulerDist <- function(euler) {
+  plot <- ggplot(data=euler, aes(x=average)) +
+    geom_density(fill = "skyblue", color="black") +
+    theme_minimal() +
+    xlab("Euler Index") +
+    ylab("Distribution")
+  
+  return(plot)
+}
+
+plot <- plotEulerDist(euler)
+ggsave(plot=plot, "SupplementaryQCImages/EulerDistribution.png", width=6, height=3, dpi=300)
+```
+
+```{r}
+## Euler Index Scatterplot
+plotEulerScatter <- function(euler) {
+  plot <- ggplot(data=euler, aes(x=Age, y=average, color=Site)) +
+    geom_point(size=2) +
+    theme_minimal() +
+    xlab("Age (yrs)") +
+    ylab("Euler Index")
+  
+  return(plot)
+}
+
+plot <- plotEulerScatter(euler)
+ggsave(plot=plot, "SupplementaryQCImages/EulerIndexByAgeScatter.png", width=10, height=4, dpi=300)
+plot
+```
+
+## ANOVA between Site and EI INDEX
+
+```{r}
+## Boxplot
+plotEulerBoxplot <- function(euler) {
+  euler <- euler %>%
+    mutate(average = abs(average))
+  plot <- ggplot(data=euler, aes(x=Site, y=average, fill=Site)) +
+    geom_boxplot() +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle=45, hjust=1),
+      legend.position = "none"
+    ) +
+    xlab("") +
+    ylab("Euler Index (no. of holes)")
+  
+  return(plot)
+}
+
+plot <- plotEulerBoxplot(eulerGMV$SUBSET)
+ggsave(plot=plot, "SupplementaryQCImages/EulerIndexBoxplot.png", width=10, height=4, dpi=300)
+ggsave(plot=plot, "SupplementaryQCImages/EulerIndexBoxplot.pdf", width=10, height=4, dpi=300)
+#plot
+
+## ANOVA
+testing <- eulerGMV$SUBSET %>%
+  filter(!Site %in% c("site-oxford", "site-sbri", "site-ucdavis-2", "site-ucdavis-3", "site-uwmadison"))
+site_ei_anova <- aov(average ~ Site, data = testing)
+summary(site_ei_anova)
+tukey_result <- TukeyHSD(site_ei_anova)
+print(tukey_result)
+#pairwise.t.test(eulerGMV$SUBSET$average, eulerGMV$SUBSET$Site, p.adjust.method = "bonferroni")
+```
+
+
+## MATRIX PLOT OF TUKEY
+
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Assuming you've run the ANOVA and TukeyHSD
+testing <- eulerGMV$SUBSET
+testing$Site <- gsub("-", "_", testing$Site)
+site_ei_anova <- aov(average ~ Site, data = testing)
+tukey_result <- TukeyHSD(site_ei_anova)
+
+# Extract p-values and comparison site names directly
+site_comparisons <- rownames(tukey_result$Site)
+p_values <- tukey_result$Site[, "p adj"]
+
+# Split the site_comparisons into two columns (Site1 and Site2)
+comparison_df <- data.frame(
+  Site1 = sapply(strsplit(site_comparisons, "-"), `[`, 1),
+  Site2 = sapply(strsplit(site_comparisons, "-"), `[`, 2),
+  p_value = p_values
+)
+
+# Create a full matrix of p-values
+sites <- unique(c(comparison_df$Site1, comparison_df$Site2))
+p_value_matrix <- matrix(1, nrow = length(sites), ncol = length(sites))
+rownames(p_value_matrix) <- sites
+colnames(p_value_matrix) <- sites
+
+# Fill in the p-values for the matrix
+for (i in 1:nrow(comparison_df)) {
+  s1 <- comparison_df$Site1[i]
+  s2 <- comparison_df$Site2[i]
+  p <- comparison_df$p_value[i]
+  p_value_matrix[s1, s2] <- p
+  p_value_matrix[s2, s1] <- p
+}
+
+# Convert the p-value matrix to a data frame for plotting
+p_value_df <- reshape2::melt(p_value_matrix, na.rm = TRUE)
+p_value_df$Var1 <- gsub("_", "-", p_value_df$Var1)
+p_value_df$Var2 <- gsub("_", "-", p_value_df$Var2)
+p_value_df$Significant <- ifelse(p_value_df$value < 0.05, "*", "")
+
+# Plot the heatmap using ggplot2
+p_value_plot <- ggplot(p_value_df, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "red", name = "p-value") +
+  geom_text(aes(label = Significant), color = "black", size = 5) +  # Add stars
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  xlab("Site 1") +
+  ylab("Site 2") +
+  ggtitle("TukeyHSD p-value Matrix")
+# Save the plot
+#ggsave(plot = p_value_plot, "SupplementaryQCImages/TukeyHSD_p_value_Matrix.png", width = 8, height = 6, dpi = 300)
+
+# Display the plot
+p_value_plot
+```
+
+
+```{r}
+library(ggpubr)
+## Plot crossplots by Region
+plotEulerCrosshairROI <- function(data, ROI, title) {
+  summary <- data %>%
+    group_by(Site) %>%
+    mutate(average = abs(average)) %>% 
+    summarise(
+      mean_roi = mean(get(ROI)),
+      sd_roi = sd(get(ROI)),
+      mean_euler = mean(average),
+      sd_euler = sd(average)
+    ) 
+  
+  plot <- ggplot(data=summary, aes(x=mean_euler, y=mean_roi, fill=Site)) +
+    geom_point(size=2) +
+    geom_errorbar(
+      aes(ymin=mean_roi - sd_roi, ymax=mean_roi + sd_roi),
+      width=0.2,
+      position=position_dodge(0.5)
+    ) +
+    geom_errorbarh(
+      aes(xmin=mean_euler - sd_euler, xmax=mean_euler + sd_euler),
+      width=0.2,
+      position=position_dodge(0.5)
+    ) +
+    theme_minimal() +
+    theme(legend.position="none", axis.line=element_line()) +
+    xlab("Euler Index (no. of holes)") +
+    ylab(expression("volume (" * mm^3 * ")")) +
+    ggtitle(title) +
+    ggeasy::easy_center_title()
+}
+
+GMV <- plotEulerCrosshairROI(eulerGMV$SUBSET, "TotalGrayVol", "GMV")
+sGMV <- plotEulerCrosshairROI(eulerSGMV$SUBSET, "SubCortGrayVol", "sGMV")
+WM <- plotEulerCrosshairROI(eulerWMV$SUBSET, "CorticalWhiteMatterVol", "WMV")
+VENT <- plotEulerCrosshairROI(eulerVent$SUBSET, "Total.Lateral.Ventricle", "Ventricle")
+plot <- GMV + sGMV + WM + VENT + 
+  plot_layout(
+    axis_titles = "collect",
+    guides = "collect"
+  )
+
+ggsave(plot=plot, "SupplementaryQCImages/EulerByROI.png", width=6, height=4, dpi=300)
+plot
+```
+
+```{r}
+library(ggpubr)
+plotEulerCrossHairSA.CT <- function(dataMT, dataSA, dataCC) {
+  summaryMT <- dataMT %>%
+    group_by(Site) %>%
+    mutate(average = abs(average)) %>% 
+    summarise(
+      mean_roi = mean(get("Mean.Thickness")),
+      sd_roi = sd(get("Mean.Thickness")),
+      mean_euler = mean(average),
+      sd_euler = sd(average)
+    )
+  plotMT <- ggplot(data=summaryMT, aes(x=mean_euler, y=mean_roi, fill=Site)) +
+    geom_point(size=2) +
+    geom_errorbar(
+      aes(ymin=mean_roi - sd_roi, ymax=mean_roi + sd_roi),
+      width=0.2,
+      position=position_dodge(0.5)
+    ) +
+    geom_errorbarh(
+      aes(xmin=mean_euler - sd_euler, xmax=mean_euler + sd_euler),
+      width=0.2,
+      position=position_dodge(0.5)
+    ) +
+    theme_minimal() +
+    theme(legend.position="none", axis.line=element_line()) +
+    xlab("Euler Index (no. of holes)") +
+    ylab(expression("Cortical Thickness (" * mm * ")")) +
+    ggtitle("Mean Thickness") +
+    ggeasy::easy_center_title()
+  
+  summarySA <- dataSA %>% 
+    group_by(Site) %>%
+    mutate(average = abs(average)) %>% 
+    summarise(
+      mean_roi = mean(get("Total.Area")),
+      sd_roi = sd(get("Total.Area")),
+      mean_euler = mean(average),
+      sd_euler = sd(average)
+    )
+  plotSA <- ggplot(data=summarySA, aes(x=mean_euler, y=mean_roi, fill=Site)) +
+    geom_point(size=2) +
+    geom_errorbar(
+      aes(ymin=mean_roi - sd_roi, ymax=mean_roi + sd_roi),
+      width=0.2,
+      position=position_dodge(0.5)
+    ) +
+    geom_errorbarh(
+      aes(xmin=mean_euler - sd_euler, xmax=mean_euler + sd_euler),
+      width=0.2,
+      position=position_dodge(0.5)
+    ) +
+    theme_minimal() +
+    theme(legend.position="none", axis.line=element_line()) +
+    xlab("Euler Index (no. of holes)") +
+    ylab(expression("Cortical Area (" * mm^2 * ")")) +
+    ggtitle("Surface Area") +
+    ggeasy::easy_center_title()
+  
+  summaryCC <- dataCC %>%
+    group_by(Site) %>%
+    mutate(average = abs(average)) %>%
+    summarise(
+      mean_roi = mean(get("BrainSegVolNotVentNoCerebellum")),
+      sd_roi = sd(get("BrainSegVolNotVentNoCerebellum")),
+      mean_euler = mean(average),
+      sd_euler = sd(average)
+    )
+  plotCC <- ggplot(data=summaryCC, aes(x=mean_euler, y=mean_roi, fill=Site)) +
+    geom_point(size=2) +
+    geom_errorbar(
+      aes(ymin=mean_roi - sd_roi, ymax=mean_roi + sd_roi),
+      width=0.2,
+      position=position_dodge(0.5)
+    ) +
+    geom_errorbarh(
+      aes(xmin=mean_euler - sd_euler, xmax=mean_euler + sd_euler),
+      width=0.2,
+      position=position_dodge(0.5)
+    ) +
+    theme_minimal() +
+    theme(legend.position="none", axis.line=element_line()) +
+    xlab("Euler Index (no. of holes)") +
+    ylab(expression("Cortical Area (" * mm^2 * ")")) +
+    ggtitle("Cerebrum") +
+    ggeasy::easy_center_title()
+  
+  plot <- plotSA + plotMT + plotCC +
+    plot_layout(
+    axis_titles = "collect",
+    guides = "collect"
+  )
+  return(plot)
+}
+
+plot <- plotEulerCrossHairSA.CT(eulerMT$SUBSET, eulerSA$SUBSET, eulerCerebrum$SUBSET)
+ggsave(plot=plot, "SupplementaryQCImages/EulerByGeometricPhenotype.pdf", width=10, height=3, dpi=300)
+ggsave(plot=plot, "SupplementaryQCImages/EulerByGeometricPhenotype.png", width=10, height=3, dpi=300)
+```
+
+
+```{r}
+## Run a linear model to confirm there is no relationship between phenotype and euler index
+library(lmerTest)
+
+model <- lmer(average ~ TotalGrayVol + Age + (1 | Site), data = eulerGMV$SUBSET)
+summary(model)
+```
+
+I want to make some plots about the visual QC stuff 
+
+```{r}
+QC <- read_xlsx("../../data_v2.0/demographics/demographic_info.xlsx", sheet="Sheet1")
+QC <- QC %>%
+  filter(Species %in% c("Macaca Mulatta", "Rhesus Macaques", "Rhesus Macaque", "Maccaca Mulatta")) %>%
+  distinct(Subject, Session, .keep_all = TRUE) %>%
+  mutate(Output_QC = ifelse(is.na(Output_QC), 3, Output_QC)) %>%
+  mutate(Output_QC = as.factor(Output_QC)) %>%
+  mutate(Age = as.numeric(Age)) %>%
+  mutate(FakeAge = Age+0.452) %>%
+  mutate(logage = log(Age)) %>%
+  mutate(logFakeAge = log(FakeAge))
+
+#p <- ggplot(data = QC, aes(x = Output_QC, y = Age)) +
+#  geom_boxplot() +
+#  scale_x_discrete(labels = c("1" = "Pass", "3" = "Fail")) +
+#  labs(x = "Output QC", y = "Age") +
+#  theme_bw() +
+#  scale_fill_npg() +
+#  theme(
+#    axis.text.x = element_text(size=14),
+#    axis.text.y = element_text(size=14),
+#    axis.title.x = element_text(size=14),
+#    axis.title.y = element_text(size=14)
+#  )
+
+fill_scale <- scale_fill_manual(
+  values = c("1" = "#E64B35", "3" = "#4DBBD5"), # Define your preferred colors
+  labels = c("1" = "Pass", "3" = "Fail")
+)
+
+p4 <- ggplot(data = QC, aes(x = logFakeAge, fill = Output_QC)) +
+  geom_density(alpha=0.6) +
+  fill_scale +
+  scale_x_continuous(
+    breaks=c(log(0+0.452), log(1+0.452), log(3+0.452), log(6+0.452), log(15+0.452), log(25+0.452)),
+    labels=c("Birth", "1yr", "3yr", "6yr", "15yr", "25yr")
+  ) +
+  labs(x = "log(Age)", y = "Density", fill = "Output QC") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(size=14, hjust=1, angle=45),
+    axis.text.y = element_text(size=14),
+    axis.title.x = element_text(size=14),
+    axis.title.y = element_text(size=14)
+  )
+
+p5 <- ggplot(data = QC, aes(x = Age, fill=Output_QC)) +
+  geom_histogram(binwidth=0.4, color="black", alpha=0.6) +
+  fill_scale +
+  labs(x = "Age", y = "Count", fill = "Output QC") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(size=14),
+    axis.text.y = element_text(size=14),
+    axis.title.x = element_text(size=14),
+    axis.title.y = element_text(size=14)
+  )
+
+# Display the plot
+p
+p4
+p5
+
+ggsave(plot=p, "SupplementaryQCImages/BoxplotVisualQC.pdf", width=6, height=4)
+ggsave(plot=p2, "SupplementaryQCImages/DensityVisualQC.pdf", width=6, height=4)
+ggsave(plot=p3, "SupplementaryQCImages/HistogramVisualQC.pdf", width=6, height=4)
+ggsave(plot=p, "SupplementaryQCImages/BoxplotVisualQC.png", width=6, height=4, dpi=300)
+ggsave(plot=p2, "SupplementaryQCImages/DensityVisualQC.png", width=6, height=4, dpi=300)
+ggsave(plot=p3, "SupplementaryQCImages/HistogramVisualQC.png", width=6, height=4, dpi=300)
+```
+```{r}
+patch <- p4 + p5 +
+  plot_layout(
+    guides = "collect",
+    axis_titles = "collect"
+  )
+
+patch
+ggsave(plot=patch, file.path("SupplementaryQCImages/patchVisualQC.pdf"), width=10, height=4)
+ggsave(plot=patch, file.path("SupplementaryQCImages/patchVisualQC.png"), width=10, height=4, dpi=300)
+```
+
+```{r}
+## Plot centiles for four global tissue types
+createCentileDist <- function(euler, measure, title) {
+  quantile <- paste0(measure, ".q.pop")
+  euler$EI <- -(euler$average)
+  p <- ggplot(data=euler, aes_string(x=quantile, y="EI", color="Sex")) +
+    geom_point(alpha=0.5) +
+    geom_smooth(method="lm", se=FALSE) +
+    theme_bw() +
+    ggtitle(title) +
+    ggeasy::easy_center_title() +
+    ylab("Euler Index (no. of holes)") +
+    xlab("Centile")
+  print(p)
+}
+
+GMV <- createCentileDist(eulerGMV$CURVE, "TotalGrayVol", "GMV")
+WMV <- createCentileDist(eulerWMV$CURVE, "CorticalWhiteMatterVol", "WMV")
+sGMV <- createCentileDist(eulerSGMV$CURVE, "SubCortGrayVol", "sGMV")
+vent <- createCentileDist(eulerVent$CURVE, "Total.Lateral.Ventricle", "Ventricle")
+final <- GMV + WMV + sGMV + vent +
+  plot_layout(
+    guides = "collect",
+    axis_titles = "collect"
+  )
+final
+ggsave(plot=final, file.path("SupplementaryQCImages/EICentiles.pdf"), width=8, height=4)
+ggsave(plot=final, file.path("SupplementaryQCImages/EICentiles.png"), width=8, height=4, dpi=300)
+```
+## SPEARMAN CORRELATION CENTILE AND EI INDEX
+
+```{r}
+model_GMV <- cor.test(abs(eulerGMV$CURVE$average), eulerGMV$CURVE$TotalGrayVol.q.pop, method="spearman")
+model_WMV <- cor.test(abs(eulerWMV$CURVE$average), eulerWMV$CURVE$CorticalWhiteMatterVol.q.pop, method="spearman")
+model_SGMV <- cor.test(abs(eulerSGMV$CURVE$average), eulerSGMV$CURVE$SubCortGrayVol.q.pop, method="spearman")
+model_Vent <- cor.test(abs(eulerVent$CURVE$average), eulerVent$CURVE$Total.Lateral.Ventricle.q.pop, method="spearman")
+print(model_GMV)
+print(model_WMV)
+print(model_SGMV)
+print(model_Vent)
+```
+
+```{r}
+model_quadratic <- lm(
+  average ~ poly(TotalGrayVol.q.pop, 3),
+  data = eulerGMV$CURVE
+)
+
+# Summarize the quadratic model
+summary(model_quadratic)
+```
+
+
+
+```{r}
+lmGMV <- lm(TotalGrayVol ~ Sex + Age + average, data=subset(eulerGMV$SUBSET, Site=="site-"))
+summary(lmGMV)
+
+#spearmanTest <- cor.test(eulerGMV$CURVE$average, eulerGMV$CURVE$TotalGrayVol.q.pop, method="spearman")
+#spearmanTest
+```
+
+```{r}
+## Significance test between euler score and raw tissue volume, by site
+perform_site_specific_tests <- function(data) {
+  unique_sites <- unique(data$Site)
+  p_values <- list()
+  for (site in unique_sites) {
+    subset_data <- subset(data, Site == site)
+    p_value <- tryCatch({
+      model <- lm(TotalGrayVol ~ Age + Sex + average, data = subset_data)
+      summary(model)$coefficients["average", "Pr(>|t|)"]
+    }, error = function(e) {
+      NULL
+    })
+    p_values[[site]] <- p_value
+  }
+  p_values_df <- data.frame(Site = names(p_values), p_value = unlist(p_values))
+  num_comparisons <- length(unique_sites)
+  p_values_df$adjusted_p_value <- p.adjust(p_values_df$p_value, method = "bonferroni", n = num_comparisons)
+  return(p_values_df)
+}
+p_values_list <- perform_site_specific_tests(eulerGMV$SUBSET)
+print(p_values_list)
+```
+

@@ -1,0 +1,75 @@
+Creating some additional demographic plots
+- Plot for visualizing distributions of males and females
+
+```{r}
+## Loading in TotalGrayVol dataframe
+loadData <- function() {
+  data <- readRDS("../../RDS/ASEG.VOLUME.COMBAT/TotalGrayVol/SUBSET.rds")
+  return(data)
+}
+
+data <- loadData()
+dim(data)
+```
+
+```{r}
+## Function for age distributions
+ageHist <- function(data, sex) {
+  data <- data %>%
+    mutate(Age = (AgeTransformed - 0.452)) %>%
+    mutate(LogAge = log(AgeTransformed)) %>%
+    filter(Sex == sex)
+  
+   data$Lifestage <- ifelse(data$Age < 0, "Prenatal",
+                            ifelse(data$Age < 4/12, "Infant", 
+                            ifelse(data$Age < 1, "Early-Childhood",
+                            ifelse(data$Age < 3, "Childhood",
+                            ifelse(data$Age < 6, "Adolescence",
+                            ifelse(data$Age < 15, "Mid-life",
+                            ifelse(data$Age < 25, "Elder", "Elder")))))))
+   
+  title <- ifelse(sex == "M", "Male", "Female")
+  
+  plot <- ggplot() +
+    geom_histogram(data=data, aes(x = LogAge, y = ..count.., fill = Lifestage), alpha=0.5, bins=100) +
+    geom_density(data=data, aes(x = LogAge, y = ..density.. * length(data)), size=1, show.legend = F) +
+    scale_y_continuous(
+      sec.axis = sec_axis(~./sum(data$LogAge), name = "Density"),
+      name = "Count"
+    ) +
+    theme_classic() +
+    scale_x_continuous(
+      breaks = c(log(0.452), log(0.452 + 4/12), log(0.452 + 1), log(0.452 + 3), log(0.452 + 6), log(0.452 + 15), log(0.452 + 25)),
+      labels = c("Birth", "4m", "1yr", "3yr", "6yr", "15yr", "25yr")) +
+    geom_vline(xintercept= log(0.452), alpha=0.7, color="gray", linetype = "dashed") + 
+    geom_vline(xintercept = log(0.452 + 4/12), alpha = 0.7, color = "gray", linetype = "dashed") +
+    geom_vline(xintercept = log(0.452 + 1), alpha = 0.7, color = "gray", linetype = "dashed") +
+    geom_vline(xintercept = log(0.452 + 2), alpha = 0.7, color = "gray", linetype = "dashed") +
+    geom_vline(xintercept = log(0.452 + 3), alpha = 0.7, color = "gray", linetype = "dashed") +
+    geom_vline(xintercept = log(0.452 + 6), alpha = 0.7, color = "gray", linetype = "dashed") +
+    geom_vline(xintercept = log(0.452 + 15), alpha = 0.7, color = "gray", linetype = "dashed") +
+    geom_vline(xintercept = log(0.452 + 25), alpha = 0.7, color = "gray", linetype = "dashed") +
+    scale_fill_npg() +
+    #xlab("") +
+    ggtitle(title) +
+    ggeasy::easy_center_title() +
+    theme(
+      axis.text.x = element_text(size = 12),
+      axis.text.y = element_text(size = 12),
+      plot.title = element_text(size = 16, face = "bold")
+    ) 
+  return(plot)
+}
+
+male <- ageHist(data, "M")
+female <- ageHist(data, "F")
+plot <- male + female +
+  plot_layout(
+    guides = "collect",
+    axis_titles = "collect"
+  )
+ggsave(plot=plot, file.path("SupplementaryDemographicImages/AgeDistributions.png"), width=12, height=4, dpi=300)
+ggsave(plot=plot, file.path("SupplementaryDemographicImages/AgeDistributions.pdf"), width=12, height=4, dpi=300)
+plot
+```
+

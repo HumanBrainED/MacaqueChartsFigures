@@ -1,0 +1,856 @@
+File for Figure 4 plots of the Brain Charts paper
+Figure 4: Regional Surface Peaks + Cross-Species Alignment (rearrange the plot, monkey, human, differences) (summarize the human peaks as well into cytoarchitecture)
+Regional surface peaks for volume, area, and thickness (ADD LINES BETWEEN THE REGIONS ON THE SURFACE)
+Bezgin network level peaks by phenotype
+Surface peaks post-warping to Desikan-Killiany parcellation (human space)
+Associated human regional peaks on the Deskian-Killian parcellation
+Difference peaks between human and macaque summarised into the Mesulam cryo-architecture
+Difference peaks mapped onto the Deskian-Killiany surface
+Plot the human peaks on the lollipop plot of the macaque peak data (the one with the ranges) (order the lollipop plot by the bezgin network) (needs to be in human space) (also generate in macaque space for supplementary or paper)
+
+Most of this stuff is already implemented in Python, but for the sake of consistency and getting it to look 'nice', I'm going to implement in R
+
+First we start with mapping the peaks to the surfaces:
+
+```{r}
+## Load the macaque peak data
+## Peak data is found in *.COMBAT/peak_CI.rds
+getMacaquePeaks <- function() {
+  markovOrder <- fromJSON("../../Data/ParcellationMappings/markov_order.json")
+  PEAK.LIST <- list()
+  for (measure in c("MARKOV.VOLUME.COMBAT", "MARKOV.AREA.COMBAT", "MARKOV.THICKNESS.COMBAT")) {
+    PEAK.LIST[[measure]] <- list()
+    for (NUM in 1:length(markovOrder)) {
+      print(file.path("../../RDS", measure, names(markovOrder)[NUM], "peak_CI.rds"))
+      PEAK.LIST[[measure]][[names(markovOrder)[NUM]]] <- readRDS(file.path("../../RDS", measure, names(markovOrder)[NUM], "peak_CI.rds"))
+    }
+  }
+  return(PEAK.LIST)
+}
+
+PEAK.LIST <- getMacaquePeaks()
+```
+
+FINAL PEAK GENERATION
+
+```{r}
+## Now we can visualize peaks on the surface
+Visualize.Surface <- function(lh_data, rh_data, species, parcellation, save_location, color_map, color_range_min, color_range_max) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release")
+  write.table(lh_data, "Plotting/temp_lh_data.csv", col.names = FALSE, row.names = FALSE)
+  write.table(rh_data, "Plotting/temp_rh_data.csv", col.names = FALSE, row.names = FALSE)
+  system(paste("python3", "Plotting/Surface.Plotting.py", parcellation, species, save_location, color_map, color_range_min, color_range_max, "Plotting/temp_lh_data.csv", "Plotting/temp_rh_data.csv", sep = " "))
+}
+
+createVisualization <- function(PEAK.LIST, measure, color_map, color_range_min, color_range_max, species, parcellation) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Plotting/Final")
+  MVal <- c(0, sapply(PEAK.LIST, function(X) {X$Male_Peak-0.452}))
+  FVal <- c(0, sapply(PEAK.LIST, function(X) {X$Female_Peak-0.452}))
+  AverageVals <- (MVal + FVal) / 2
+  savePath <- file.path("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Plotting/Final/Figure3Images/MacaquePeaks", paste(measure, "peak", sep="_"))
+  MSP <- paste(savePath, "M.png", sep="_")
+  FSP <- paste(savePath, "F.png", sep="_")
+  ASP <- paste(savePath, "Ave.svg", sep="_")
+  Visualize.Surface(MVal, MVal, species, parcellation, MSP, color_map, color_range_min, color_range_max)
+  Visualize.Surface(FVal, FVal, species, parcellation, FSP, color_map, color_range_min, color_range_max)
+  Visualize.Surface(AverageVals, AverageVals, species, parcellation, ASP, color_map, color_range_min, color_range_max)
+}
+
+createVisualization(PEAK.LIST[["MARKOV.VOLUME.COMBAT"]], "Volume", "RdYlBu_r", 0, 6, "monkey", "markov")
+createVisualization(PEAK.LIST[["MARKOV.AREA.COMBAT"]], "Area", "RdYlBu_r", 0, 6, "monkey", "markov")
+createVisualization(PEAK.LIST[["MARKOV.THICKNESS.COMBAT"]], "Thickness", "RdYlBu_r", 0, 6, "monkey", "markov")
+```
+
+## Get average CI range for volume, thickness, area
+
+```{r}
+getAverageCIRange <- function(PEAK.LIST, measure) {
+  PEAK.LIST <- lapply(PEAK.LIST, function(X) {
+    X <- X - 0.452
+    X$Male_Range <- abs(X$Male_Peak_Lower - X$Male_Peak_Upper)
+    X$Female_Range <- abs(X$Female_Peak_Lower - X$Female_Peak_Upper)
+    return(X)
+  })
+  male_ranges <- unlist(lapply(PEAK.LIST, function(X) X$Male_Range))
+  average_male_range <- mean(male_ranges, na.rm = TRUE)
+  sd_male_range <- sd(male_ranges, na.rm = TRUE)
+  print(average_male_range)
+  print(sd_male_range)
+}
+getAverageCIRange(PEAK.LIST[["MARKOV.THICKNESS.COMBAT"]], "Volume")
+```
+
+```{r}
+## Now make a lollipop plot of the peaks and its confidence intervals
+lollipopMacaque <- function(PEAK.LIST, measure, sortedDescending=TRUE) {
+  library(ggplot2)
+  PEAK.LIST <- lapply(PEAK.LIST, function(X) {
+    X <- X - 0.452
+    X$Male_Range <- abs(X$Male_Peak_Lower - X$Male_Peak_Upper)
+    X$Female_Range <- abs(X$Female_Peak_Lower - X$Female_Peak_Upper)
+    return(X)
+  })
+  male_peaks <- sapply(PEAK.LIST, function(x) x$Male_Peak)
+  average_male_peak <- mean(male_peaks)
+
+  PEAK.LIST <- bind_rows(PEAK.LIST, .id = "region")
+  if (sortedDescending == TRUE) {
+    PEAK.LIST.M <- PEAK.LIST[order(PEAK.LIST$Male_Peak), ]
+    PEAK.LIST.F <- PEAK.LIST[order(PEAK.LIST$Female_Peak), ]
+    PEAK.LIST.M$region <- factor(row.names(PEAK.LIST.M), levels = row.names(PEAK.LIST.M)[order(PEAK.LIST.M$Male_Peak)])
+    PEAK.LIST.F$region <- factor(row.names(PEAK.LIST.F), levels = row.names(PEAK.LIST.F)[order(PEAK.LIST.F$Female_Peak)])
+  }
+
+  PEAK.LIST.M <- PEAK.LIST.M %>%
+    mutate(Male_Peak_Upper = ifelse((Male_Peak_Upper - Male_Peak) > 10, 9, Male_Peak_Upper))
+
+  # Now plot
+  male.scatter <- ggplot() +
+    geom_point(data = PEAK.LIST.M, aes(x = Male_Peak, y = region, color = Male_Range), size = 8, alpha = 0.5) +
+    geom_vline(xintercept = average_male_peak, color="black", linetype = "dashed", size=1.5) +
+    geom_errorbarh(data = PEAK.LIST.M, aes(xmin = Male_Peak_Lower, xmax = Male_Peak_Upper, y = region), height = 0.1) +
+    ylab("Regions") +
+    xlab("Age Peak (yrs)") +
+    ggtitle(measure) +
+    theme_classic() +
+    scale_color_gradient(low = "gray", high = "red", limits = c(0, 10)) +
+    labs(color = "CI Range (yrs)") +
+    theme(
+      panel.grid.major.y = element_line(color = "gray", linetype = "dashed", size = 0.3),
+      axis.text.y = element_text(size = 18),
+      axis.title.x = element_text(size=22),
+      axis.text.x = element_text(size=18),
+      title = element_text(size=24),
+      legend.text = element_text(size = 22),
+    ) +
+    ggeasy::easy_center_title()
+
+  if (measure == "MARKOV.VOLUME.COMBAT") {
+    male.scatter <- male.scatter + xlim(c(0, 11))
+  } else if (measure == "MARKOV.AREA.COMBAT") {
+    male.scatter <- male.scatter + xlim(c(0, 15))
+  } else if (measure == "MARKOV.THICKNESS.COMBAT") {
+    male.scatter <- male.scatter + xlim(c(0, 7.5))
+  }
+
+  female.scatter <- ggplot() +
+    geom_point(data = PEAK.LIST.F, aes(x = Female_Peak, y = region, color = Female_Range), size = 5, alpha = 0.5) +
+    geom_errorbarh(data = PEAK.LIST.F, aes(xmin = Female_Peak_Lower, xmax = Female_Peak_Upper, y = region), height = 0.1) +
+    ylab("Regions") +
+    xlab("Age Peak (yrs)") +
+    theme_classic() +
+    scale_color_gradient(low = "gray", high = "red") +
+    theme(
+      panel.grid.major.y = element_line(color = "gray", linetype = "dashed", size = 0.3),
+      axis.text.y = element_text(size = 10)
+    )
+
+  ggsave(file.path("Figure3Images/Peak.CI/MacaqueOnly", paste0("M_", measure, ".png")), plot=male.scatter, width=8, height=12)
+  ggsave(file.path("Figure3Images/Peak.CI/MacaqueOnly", paste0("F_", measure, ".png")), plot=female.scatter, width=8, height=12)
+  return(male.scatter)
+}
+vol <- lollipopMacaque(PEAK.LIST[["MARKOV.VOLUME.COMBAT"]], "Volume")
+area <- lollipopMacaque(PEAK.LIST[["MARKOV.AREA.COMBAT"]], "Area")
+thickness <- lollipopMacaque(PEAK.LIST[["MARKOV.THICKNESS.COMBAT"]], "Thickness")
+final <- vol + area + thickness +
+  plot_layout(
+    axis_titles = "collect",
+    guides="collect"
+  )
+ggsave(file.path("Figure3Images/Peak.CI/MacaqueOnly", paste0("M.png")), plot=final, width=32, height=20)
+ggsave(file.path("Figure3Images/Peak.CI/MacaqueOnly", paste0("M.pdf")), plot=final, width=32, height=20)
+```
+
+```{r}
+## Load in and visualize the human peaks
+# ALREADY VISUALIZED
+```
+
+```{r}
+## Summarize the macaque peaks on the bezgin network level
+## First create func.gifti files
+createMacaquePeakGifti <- function(MVal, FVal, measure) {
+  write.table(MVal, "Figure3Scripts/temp_MVal.csv", col.names=FALSE, row.names=FALSE)
+  write.table(FVal, "Figure3Scripts/temp_FVal.csv", col.names=FALSE, row.names=FALSE)
+  system(paste("python3", "Figure3Scripts/mapToSurface.py", "--lh-csv", "Figure3Scripts/temp_MVal.csv", "--rh-csv", "Figure3Scripts/temp_MVal.csv", "--parcellation", "markov", "--save-prefix", paste0("Figure3Data/MacaquePeaks/func.gifti.markov/", "M.", measure)))
+  system(paste("python3", "Figure3Scripts/mapToSurface.py", "--lh-csv", "Figure3Scripts/temp_FVal.csv", "--rh-csv", "Figure3Scripts/temp_FVal.csv", "--parcellation", "markov", "--save-prefix", paste0("Figure3Data/MacaquePeaks/func.gifti.markov/", "F.", measure)))
+}
+M <- c(0, unlist(sapply(PEAK.LIST[["MARKOV.THICKNESS.COMBAT"]], function(X) {X$Male_Peak})))
+F <- c(0, unlist(sapply(PEAK.LIST[["MARKOV.THICKNESS.COMBAT"]], function(X) {X$Female_Peak})))
+createMacaquePeakGifti(M, F, "Thickness")
+```
+
+```{r}
+## Now summarize the func GIFTI files (macaque space) into the bezgin network and plot results
+mapMarkov2Bezgin <- function(lh_path, rh_path, save_prefix) {
+  system(paste("python3", "Figure3Scripts/mapParcellation2Cryoarchitecture.py", "--surface", "markov", "--lh-path", lh_path, "--rh-path", rh_path, "--save-prefix", save_prefix, "--parcellation", "bezgin"))
+}
+
+mapMarkov2Bezgin(
+  "Figure3Data/MacaquePeaks/func.gifti.markov/M.Volume.lh.func.gii",
+  "Figure3Data/MacaquePeaks/func.gifti.markov/M.Volume.rh.func.gii",
+  "Figure3Data/MacaquePeaks/func.gifti.bezgin/M.Volume"
+  )
+mapMarkov2Bezgin(
+  "Figure3Data/MacaquePeaks/func.gifti.markov/F.Volume.lh.func.gii",
+  "Figure3Data/MacaquePeaks/func.gifti.markov/F.Volume.rh.func.gii",
+  "Figure3Data/MacaquePeaks/func.gifti.bezgin/F.Volume"
+)
+mapMarkov2Bezgin(
+  "Figure3Data/MacaquePeaks/func.gifti.markov/M.Area.lh.func.gii",
+  "Figure3Data/MacaquePeaks/func.gifti.markov/M.Area.rh.func.gii",
+  "Figure3Data/MacaquePeaks/func.gifti.bezgin/M.Area"
+)
+mapMarkov2Bezgin(
+  "Figure3Data/MacaquePeaks/func.gifti.markov/F.Area.lh.func.gii",
+  "Figure3Data/MacaquePeaks/func.gifti.markov/F.Area.rh.func.gii",
+  "Figure3Data/MacaquePeaks/func.gifti.bezgin/F.Area"
+)
+mapMarkov2Bezgin(
+  "Figure3Data/MacaquePeaks/func.gifti.markov/M.Thickness.lh.func.gii",
+  "Figure3Data/MacaquePeaks/func.gifti.markov/M.Thickness.rh.func.gii",
+  "Figure3Data/MacaquePeaks/func.gifti.bezgin/M.Thickness"
+)
+mapMarkov2Bezgin(
+  "Figure3Data/MacaquePeaks/func.gifti.markov/F.Thickness.lh.func.gii",
+  "Figure3Data/MacaquePeaks/func.gifti.markov/F.Thickness.rh.func.gii",
+  "Figure3Data/MacaquePeaks/func.gifti.bezgin/F.Thickness"
+)
+```
+
+```{r}
+library(patchwork)
+## Now load in the bezgin data and make plots for volume, thickness, and area
+bezginBarPlot <- function(data_path, sem_path, type) {
+  library(ggplot2)
+  regions <- c("Default1", "Somatomotor", "Auditory", "Limbic", "DorsalAtt", "Visual", "Insular-Opecular")
+  data <- read.csv(data_path, col.names="mean")
+  sem <- read.csv(sem_path)
+  data$sem <- sem[,1]
+  data$region <- regions
+
+  plot <- ggplot(data, aes(x = region, y = mean, fill=region)) +
+    geom_col() +
+    geom_errorbar(aes(ymin = mean - sem, ymax = mean + sem), width = 0.2) +
+    scale_fill_manual(values=c(
+      "Default1" = "#CB816F",
+      "Somatomotor" = "#8BB0D7",
+      "Auditory" = "#FCFFAB",
+      "Limbic" = "#B7E058",
+      "DorsalAtt" = "#EAB557",
+      "Visual" = "#A28DFF",
+      "Insular-Opecular" = "#99D3C7")) +
+    ylab("Peak Age") +
+    xlab("") +
+    ggtitle(type) +
+    ylim(0, 3) +
+    theme_classic() +
+    theme(
+      axis.text.y = element_text(size = 15),
+      legend.text = element_text(size = 15),
+      legend.title = element_blank(),  # Remove legend title
+      axis.text.x = element_blank(),  # Remove x-axis labels
+      axis.ticks.x = element_blank(),  # Remove x-axis ticks
+      plot.margin = unit(c(0, 0, 0, 0), "cm")
+    ) +
+    ggeasy::easy_center_title()
+
+  ggsave(file.path("Figure3Images/BezginPeak", paste0("Bezgin.M.L.", type, ".png")), plot=plot, width=6, height=4)
+  return(plot)
+}
+BezginVol <- bezginBarPlot(
+  "Figure3Data/MacaquePeaks/peak.csv.bezgin/M.Volume.L.csv",
+  "Figure3Data/MacaquePeaks/peak.csv.bezgin/M.Volume.SEM.L.csv",
+  "Volume"
+  )
+BezginArea <- bezginBarPlot(
+  "Figure3Data/MacaquePeaks/peak.csv.bezgin/M.Area.L.csv",
+  "Figure3Data/MacaquePeaks/peak.csv.bezgin/M.Area.SEM.L.csv",
+  "Area"
+)
+BezginThickness <- bezginBarPlot(
+  "Figure3Data/MacaquePeaks/peak.csv.bezgin/M.Thickness.L.csv",
+  "Figure3Data/MacaquePeaks/peak.csv.bezgin/M.Thickness.SEM.L.csv",
+  "Thickness"
+)
+bezginPlot <- BezginVol + BezginArea + BezginThickness +
+  plot_layout(
+    axis_titles = "collect",
+    guides = "collect",
+  )
+#ggsave("Figure3Images/BezginPeak/Bezgin.M.L.pdf", plot=bezginPlot, width=12, height=4)
+bezginPlot
+```
+
+```{r}
+## Call bash file to map from macaque space to human space
+system(paste("bash", "Figure3Scripts/map2human.sh"))
+```
+
+```{r}
+## Summarize the markov parcellation in human space into aparc (with csv peaks and metric files)
+system(paste("bash", "Figure3Scripts/loopRemapMarkov2Human.sh"))
+```
+
+```{r}
+## Generate mesulam
+mapAparc2Mesulam <- function(lh_path, rh_path, save_prefix) {
+  system(paste("python3", "Figure3Scripts/mapParcellation2Cryoarchitecture.py", "--lh-path", lh_path, "--rh-path", rh_path, "--save-prefix", save_prefix, "--parcellation", "mesulam"))
+}
+
+mapAparc2Mesulam(
+  "Figure3Data/MacaquePeaksInHuman/aparc/gifti/M.Volume.lh.func.gii",
+  "Figure3Data/MacaquePeaksInHuman/aparc/gifti/M.Volume.rh.func.gii",
+  "Figure3Data/MacaquePeaksInHuman/aparc/aparc2Mesulam/M.Volume"
+  )
+mapAparc2Mesulam(
+  "Figure3Data/MacaquePeaksInHuman/aparc/gifti/M.Area.lh.func.gii",
+  "Figure3Data/MacaquePeaksInHuman/aparc/gifti/M.Area.rh.func.gii",
+  "Figure3Data/MacaquePeaksInHuman/aparc/aparc2Mesulam/M.Area"
+  )
+mapAparc2Mesulam(
+  "Figure3Data/MacaquePeaksInHuman/aparc/gifti/M.Thickness.lh.func.gii",
+  "Figure3Data/MacaquePeaksInHuman/aparc/gifti/M.Thickness.rh.func.gii",
+  "Figure3Data/MacaquePeaksInHuman/aparc/aparc2Mesulam/M.Thickness"
+  )
+mapAparc2Mesulam(
+  "Figure3Data/MacaquePeaksInHuman/aparc/gifti/F.Volume.lh.func.gii",
+  "Figure3Data/MacaquePeaksInHuman/aparc/gifti/F.Volume.rh.func.gii",
+  "Figure3Data/MacaquePeaksInHuman/aparc/aparc2Mesulam/F.Volume"
+  )
+mapAparc2Mesulam(
+  "Figure3Data/MacaquePeaksInHuman/aparc/gifti/F.Area.lh.func.gii",
+  "Figure3Data/MacaquePeaksInHuman/aparc/gifti/F.Area.rh.func.gii",
+  "Figure3Data/MacaquePeaksInHuman/aparc/aparc2Mesulam/F.Area"
+  )
+mapAparc2Mesulam(
+  "Figure3Data/MacaquePeaksInHuman/aparc/gifti/F.Thickness.lh.func.gii",
+  "Figure3Data/MacaquePeaksInHuman/aparc/gifti/F.Thickness.rh.func.gii",
+  "Figure3Data/MacaquePeaksInHuman/aparc/aparc2Mesulam/F.Thickness"
+  )
+```
+
+```{r}
+## Load in and plot the lollipop plot of the human vs macaque peaks (also have to normalize) (?)
+loadHumanMacaqueAparcPeaks <- function() {
+  ## Load in the peaks for both species (TotalGrayVol, SurfaceArea, CorticalThickness)
+  aparcLabels <- fromJSON(file="../../Data/ParcellationMappings/aparc_order.json")
+  MesulamNames <- c("Paralimbic", "High-order Association", "Modality-specific Association", "Idiotypic (primary)")
+  MesulamMapping <- read.csv("Figure3Data/MacaquePeaksInHuman/aparc/aparc2Mesulam/M.Volume.mapping.L.csv", header=FALSE, col.names="MesulamLabels")
+  MesulamMapping <- MesulamMapping %>%
+    mutate(MesulamNames = MesulamNames[MesulamLabels])
+  PEAKS <- list()
+  PEAKS[["Volume"]] <- data.frame(
+    Macaque = read.csv("Figure3Data/MacaquePeaksInHuman/aparc/csv/M.Volume.lh.csv", header=FALSE, col.names="Macaque"),
+    Human = read.csv("Figure3Data/HumanPeaks/volume_peak.csv", header=FALSE, col.names="Human"),
+    AparcNames = c("unknown", names(aparcLabels)),
+    MesulamLabels = MesulamMapping$MesulamLabels,
+    MesulamNames = MesulamMapping$MesulamNames
+  )
+  PEAKS[["Area"]] <- data.frame(
+    Macaque = read.csv("Figure3Data/MacaquePeaksInHuman/aparc/csv/M.Area.lh.csv", header=FALSE, col.names="Macaque"),
+    Human = read.csv("Figure3Data/HumanPeaks/area_peaks.csv", header=FALSE, col.names="Human"),
+    AparcNames = c("unknown", names(aparcLabels)),
+    MesulamLabels = MesulamMapping$MesulamLabels,
+    MesulamNames = MesulamMapping$MesulamNames
+  )
+  PEAKS[["Thickness"]] <- data.frame(
+    Macaque = read.csv("Figure3Data/MacaquePeaksInHuman/aparc/csv/M.Thickness.lh.csv", header=FALSE, col.names="Macaque"),
+    Human = read.csv("Figure3Data/HumanPeaks/thickness_peaks.csv", header=FALSE, col.names="Human"),
+    AparcNames = c("unknown", names(aparcLabels)),
+    MesulamLabels = MesulamMapping$MesulamLabels,
+    MesulamNames = MesulamMapping$MesulamNames
+  )
+  saveRDS(PEAKS, "Figure3Data/HumanMacaqueAparcPeaks.rds")
+  return(PEAKS)
+}
+aparcPeaks <- loadHumanMacaqueAparcPeaks()
+```
+
+```{r}
+## Plot macaque surfaces in human space
+Visualize.Surface <- function(lh_data, rh_data, species, parcellation, save_location, color_map, color_range_min, color_range_max) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release")
+  write.table(lh_data, "Plotting/temp_lh_data.csv", col.names = FALSE, row.names = FALSE)
+  write.table(rh_data, "Plotting/temp_rh_data.csv", col.names = FALSE, row.names = FALSE)
+  system(paste("python3", "Plotting/Surface.Plotting.py", parcellation, species, save_location, color_map, color_range_min, color_range_max, "Plotting/temp_lh_data.csv", "Plotting/temp_rh_data.csv", sep = " "))
+}
+
+createVisualization <- function(MVal, measure, color_map, color_range_min, color_range_max, species, parcellation) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Plotting/Final")
+  savePath <- file.path("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Plotting/Final/Figure3Images/HumanPeaks", paste(measure, "peak", sep="_"))
+  MSP <- paste(savePath, "M.png", sep="_")
+  Visualize.Surface(MVal, MVal, species, parcellation, MSP, color_map, color_range_min, color_range_max)
+}
+
+MVal <- aparcPeaks[['Volume']]$Human
+createVisualization(MVal, "Volume", "RdYlBu_r", 0, 16, "human", "aparc")
+MVal <- aparcPeaks[['Area']]$Human
+createVisualization(MVal, "Area", "RdYlBu_r", 0, 16, "human", "aparc")
+MVal <- aparcPeaks[['Thickness']]$Human
+createVisualization(MVal, "Thickness", "RdYlBu_r", 0, 6, "human", "aparc")
+```
+
+```{r}
+## Make a lollipop plot of human and macaque peaks (in human space)
+humanMacaqueLollipop <- function(normalizingHumanAge, normalizingMacaqueAge, aparcPeaks, type) {
+  library(ggplot2)
+  library(ggnewscale)
+  aparcPeaks$MacaqueNormalized <- aparcPeaks$Macaque / normalizingMacaqueAge
+  aparcPeaks$HumanNormalized <- aparcPeaks$Human / normalizingHumanAge
+  aparcPeaks$Range <- aparcPeaks$MacaqueNormalized - aparcPeaks$HumanNormalized
+  aparcPeaks$AparcNames <- factor(aparcPeaks$AparcNames, levels = aparcPeaks$AparcNames[order(aparcPeaks$MesulamLabels)])
+  scatter <- ggplot() +
+    geom_point(data = aparcPeaks, aes(x = MacaqueNormalized, y = reorder(AparcNames, MacaqueNormalized), color="Macaque"), size = 5, alpha = 0.8) +
+    geom_point(data = aparcPeaks, aes(x = HumanNormalized, y = reorder(AparcNames, MacaqueNormalized), color="Human"), size = 5, alpha = 0.8) +
+    scale_color_manual(
+      name = "",
+      values = c(Macaque = "#E3170A", Human = "#247BA0")
+    ) +
+    new_scale_color() +
+    geom_segment(
+      data = aparcPeaks,
+      aes(x = MacaqueNormalized, xend = HumanNormalized + sign(Range) * 0.007, y = reorder(AparcNames, MacaqueNormalized), yend = reorder(AparcNames, MacaqueNormalized), colour=Range),
+      size = 0.8,
+      alpha=0.6,
+      arrow = arrow(type = "open", length = unit(0.07, "inches"))) +
+    scale_color_gradientn(
+      colors = c("blue","gray", "red"),
+      limits = c(-0.2, 0.2),
+      oob = scales::squish,
+      name="Prop. Age Difference"
+    ) +
+    ylab("") +
+    xlab("Proportional Lifespan Peak") +
+    theme_classic() +
+    theme(
+      panel.grid.major.y = element_line(color = "gray", linetype = "dashed", size = 0.3),
+      axis.text.y = element_text(size = 10),
+      strip.placement = "outside",
+      strip.background = element_blank(),
+      panel.spacing = unit(0, "lines"),
+      strip.text = element_text(margin = margin(0, 0, 10, 0), size=12)
+    ) +
+    facet_wrap(~MesulamNames, strip.position="left", scales="free_y", ncol=1)
+  ggsave(file.path("Figure3Images/MacaquePeaksInHumanSpace", paste0("aparc.human.macaque.", type, ".png")), plot=scatter, width=6, height=10, dpi=300)
+  return (scatter)
+}
+scatter <- humanMacaqueLollipop(80, 25, aparcPeaks[["Area"]], "Area")
+scatter
+```
+
+```{r}
+## Generate the difference maps (after normalizing for some global metric peak)
+Visualize.Surface <- function(lh_data, rh_data, species, parcellation, save_location, color_map, color_range_min, color_range_max) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release")
+  write.table(lh_data, "Plotting/temp_lh_data.csv", col.names = FALSE, row.names = FALSE)
+  write.table(rh_data, "Plotting/temp_rh_data.csv", col.names = FALSE, row.names = FALSE)
+  system(paste("python3", "Plotting/Surface.Plotting.py", parcellation, species, save_location, color_map, color_range_min, color_range_max, "Plotting/temp_lh_data.csv", "Plotting/temp_rh_data.csv", sep = " "))
+}
+
+createVisualization <- function(MVal, measure, color_map, color_range_min, color_range_max, species, parcellation) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Plotting/Final")
+  savePath <- file.path("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Plotting/Final/Figure3Images/DifferenceMaps/aparc", paste(measure, "peak", sep="_"))
+  MSP <- paste(savePath, "M.png", sep="_")
+  Visualize.Surface(MVal, MVal, species, parcellation, MSP, color_map, color_range_min, color_range_max)
+}
+
+createMacaquePeakGifti <- function(Val, measure) {
+  write.table(Val, "Figure3Scripts/temp_Val.csv", col.names=FALSE, row.names=FALSE)
+  system(paste("python3", "Figure3Scripts/mapToSurface.py", "--lh-csv", "Figure3Scripts/temp_Val.csv", "--rh-csv", "Figure3Scripts/temp_Val.csv", "--parcellation", "aparc", "--save-prefix", paste0("Figure3Data/MacaquePeaksInHuman/aparc/DifferenceMaps/", "M.", measure)))
+}
+
+generateDifferenceMaps <- function(aparcPeaks, type, normalizingHumanAge, normalizingMacaqueAge) {
+  aparcPeaks$MacaqueNormalized <- aparcPeaks$Macaque / normalizingMacaqueAge
+  aparcPeaks$HumanNormalized <- aparcPeaks$Human / normalizingHumanAge
+  aparcPeaks$Difference <- aparcPeaks$HumanNormalized - aparcPeaks$MacaqueNormalized
+  aparcPeaks$Difference[1] <- 0
+  createMacaquePeakGifti(aparcPeaks$Difference, type)
+  createVisualization(aparcPeaks$Difference, type, "coolwarm", -0.2, 0.2, "human", "aparc")
+  return(aparcPeaks)
+}
+aparcPeaks[["Volume"]] <- generateDifferenceMaps(aparcPeaks[['Volume']], "Volume", 80, 25)
+aparcPeaks[["Area"]] <- generateDifferenceMaps(aparcPeaks[['Area']], "Area", 80, 25)
+aparcPeaks[["Thickness"]] <- generateDifferenceMaps(aparcPeaks[['Thickness']], "Thickness", 80, 25)
+```
+
+```{r}
+## Load in and plot the mesulam data
+library(ggplot2)
+library(patchwork)
+mesulamBarPlot <- function(aparcPeaks, type) {
+  summary <- aparcPeaks %>%
+    group_by(MesulamNames) %>%
+    slice(-1) %>%
+    summarise(
+      mean_diff = mean(Difference),
+      sem_diff = (sd(Difference) / n())
+    )
+
+  plot <- ggplot(summary, aes(x = MesulamNames, y = mean_diff, fill=MesulamNames)) +
+    geom_col() +
+    geom_errorbar(aes(ymin = mean_diff - sem_diff, ymax = mean_diff + sem_diff), width = 0.2) +
+    scale_fill_manual(values=c(
+      "Paralimbic" = '#83B540',
+      "High-order Association" = '#F5A190',
+      "Modality-specific Association" = '#F2F45D',
+      "Idiotypic (primary)" = '#7C9ECF')) +
+    ylab("Lifespan Peak Difference") +
+    xlab("") +
+    #ggtitle(type) +
+    #ylim(0, 3) +
+    theme_classic() +
+    theme(
+      legend.text = element_text(size=15),
+      axis.text.y = element_text(size=15),
+      legend.title = element_blank(),  # Remove legend title
+      axis.text.x = element_blank(),  # Remove x-axis labels
+      axis.ticks.x = element_blank(),  # Remove x-axis ticks
+      plot.margin = unit(c(0, 0, 0, 0), "cm")
+    ) +
+    ggeasy::easy_center_title()
+  ggsave(file.path("Figure3Images/MesulamDiff", paste0("Mesulam.M.L.", type, ".png")), plot=plot, width=6, height=4)
+  return(plot)
+}
+
+MesulamVol <- mesulamBarPlot(aparcPeaks[["Volume"]], "Volume")
+MesulamArea <- mesulamBarPlot(aparcPeaks[["Area"]], "Area")
+MesulamThickness <- mesulamBarPlot(aparcPeaks[["Thickness"]], "Thickness")
+mesulamPlot <- MesulamVol + MesulamArea + MesulamThickness +
+  plot_layout(
+    axis_titles = "collect",
+    guides = "collect",
+  )
+ggsave("Figure3Images/MesulamDiff/Mesulam.M.L.pdf", plot=mesulamPlot, width=12, height=4)
+mesulamPlot
+```
+
+```{r}
+## Add mesulam vol, area, thickness together with bezgin
+Vol <- BezginVol / MesulamVol
+ggsave("Figure3Images/MesulamDiff/MesulamBezgin.M.L.Vol.png", plot=Vol, width=6, height=4)
+Area <- BezginArea / MesulamArea
+ggsave("Figure3Images/MesulamDiff/MesulamBezgin.M.L.Area.png", plot=Area, width=6, height=4)
+Thickness <- BezginThickness / MesulamThickness & theme(legend.text = element_text(size=12))
+ggsave("Figure3Images/MesulamDiff/MesulamBezgin.M.L.Thickness.png", plot=Thickness, width=6, height=4)
+```
+
+Map back to volume space
+Feed volumes into neuroquery
+
+```{r}
+system(paste("bash", "Figure3Scripts/metric2volume_RC.sh"))
+```
+
+```{r}
+lh_aparc <- "../../Atlas/aparc/fs_LR.aparc.L.32k.func.gii"
+rh_aparc <- "../../Atlas/aparc/fs_LR.aparc.R.32k.func.gii"
+base_metric_path <- "Figure3Data/MacaquePeaksInHuman/aparc/DifferenceMaps"
+n_terms <- 200
+n_studies <- 10
+
+system(paste("python3", "Figure3Scripts/image_search.py",
+             "--image-path", file.path(base_metric_path, "volumes", "M.Volume.nii.gz"),
+             "--n-studies", n_studies,
+             "--n-terms", n_terms,
+             "--pos-neg",
+             "--bins", 4,
+             "--output", file.path(base_metric_path, "neuroquery", "M.Volume")))
+system(paste("python3", "Figure3Scripts/image_search.py",
+             "--image-path", file.path(base_metric_path, "volumes", "M.Area.nii.gz"),
+             "--n-studies", n_studies,
+             "--n-terms", n_terms,
+             "--pos-neg",
+             "--bins", 4,
+             "--output", file.path(base_metric_path, "neuroquery", "M.Area")))
+system(paste("python3", "Figure3Scripts/image_search.py",
+             "--image-path", file.path(base_metric_path, "volumes", "M.Thickness.nii.gz"),
+             "--n-studies", n_studies,
+             "--n-terms", n_terms,
+             "--pos-neg",
+             "--bins", 4,
+             "--output", file.path(base_metric_path, "neuroquery", "M.Thickness")))
+```
+
+Map to labels
+
+```{r}
+loadKeys <- function() {
+  topics_to_keep = c(1, 4,  6, 14,
+                  18, 23, 25,
+                  20, 21, 27, 29,
+                  30, 31, 33, 35,
+                  36, 38, 41,
+                  44, 45, 48, 49
+                  )
+  labels = c('affective processing', ' verbal semantics', 'cued attention', 'working memory',
+          'autobiographical memory', 'inhibition', 'motor',
+          'visual perception', 'numerical cognition', 'reward-based decision making', 'visual attention',
+          'multisensory processing', 'visuospatial','eye movements', 'action',
+          'auditory processing', 'pain', 'declarative memory',
+          'visual semantics', 'emotion', 'cognitive control', 'social cognition'
+          )
+  keys <- read.csv("Figure3Scripts/v3-topics-50-keys.txt", sep = "\t", header = FALSE, row.names = 1)
+  keys <- keys[topics_to_keep, , drop = FALSE]
+  keys$labels <- labels
+  colnames(keys) <- c("unknown", "words", "labels")
+  return(keys)
+}
+
+mapLabels <- function(path, type, lowerBin, upperBin) {
+  result <- list()
+  lower_bins <- sapply(1:lowerBin, function(X) { paste0("negative/bin_", X) })
+  upper_bins <- sapply(upperBin:4, function(X) { paste0("positive/bin_", X) })
+  terms <- list()
+  for (bin in c(lower_bins, upper_bins)) {
+    term_lines <- readLines(file.path(path, "neuroquery", type, bin, "terms.json"))
+    terms[[bin]] <- as.data.frame(do.call(rbind, lapply(term_lines, function(line) fromJSON(line, flatten = TRUE))))
+    terms[[bin]]$bin <- bin
+    if (bin %in% lower_bins) {
+      terms[[bin]]$scale <- "negative"
+    } else {
+      terms[[bin]]$scale <- "positive"
+    }
+  }
+  find_label <- function(term) {
+    matched_label <- keys$labels[str_detect(keys$words, term)]
+    if (length(matched_label) > 0) {
+      return(matched_label[1])
+    } else {
+      return(NA)
+    }
+  }
+  terms <- lapply(terms, function(X) {
+    X$label <- sapply(X$term, find_label)
+    return(X)
+  })
+  terms <- lapply(terms, function(X) {
+    X <- X %>%
+      filter(similarity > 0.5, !is.na(label)) %>%
+      mutate(similarity = as.numeric(similarity)) %>%
+      mutate(score = ifelse(scale == "negative", -(similarity), similarity))
+    return(X)
+  })
+  terms <- bind_rows(terms)
+  saveRDS(terms, file.path(path, "neuroquery", type, "mappedTerms.rds"))
+  result[[1]] <- as.data.frame(terms)
+  result <- Reduce(bind_rows, result)
+
+  ## Summarise the labels
+  result <- as.data.frame(result) %>%
+    group_by(scale) %>%
+    mutate(total_score = abs(score)) %>%
+    arrange(total_score) %>%
+    mutate(rank = row_number()) %>%
+    filter(rank <= 10) %>%
+    ungroup()
+
+  result <- result %>%
+    group_by(label) %>%
+    slice(which.max(total_score))
+
+  return(result)
+}
+
+generateWordCloud <- function(terms, savePath) {
+
+  data <- terms %>%
+    group_by(label, scale) %>%
+    summarize(freq = rank) %>%
+    mutate(color = ifelse(scale == "negative", "blue", "red"))
+
+  print(file.path(getwd(), savePath, "summaryTerms.rds"))
+  saveRDS(data, file.path(savePath, "summaryTerms.rds"))
+  wordcloud_data <- data.frame(word = as.character(data$label), freq = data$freq, color=data$color)
+  plot <- wordcloud2(wordcloud_data, size = .5, color = wordcloud_data$color, backgroundColor = "white", maxRotation = 0, minRotation = 0)
+  saveWidget(plot, file = file.path(savePath, "wordcloud2.html"))
+  webshot::webshot(file.path(savePath, "wordcloud2.html"), file.path(savePath, "wordcloud2.png"), vwidth = 1000, vheight = 1000, delay=10)
+  return(plot)
+}
+
+keys <- loadKeys()
+allTerms <- mapLabels("Figure3Data/MacaquePeaksInHuman/aparc/DifferenceMaps", "M.Volume.Ranked", 1, 4)
+generateWordCloud(allTerms, "Figure3Data/MacaquePeaksInHuman/aparc/DifferenceMaps/neuroquery/M.Volume.Ranked")
+```
+
+Rank the difference maps and map them on to x and y coordinates
+
+```{r}
+generateRankedMapping <- function(aparcPeaks, type) {
+  aparcPeaks$MacaqueRanked <- rank(aparcPeaks$Macaque)
+  aparcPeaks$HumanRanked <- rank(aparcPeaks$Human)
+  aparcPeaks$RankDiff <- aparcPeaks$HumanRanked - aparcPeaks$MacaqueRanked
+  aparcPeaks$color <- ifelse(aparcPeaks$RankDiff > 0, "#247BA0", "#E3170A")
+
+  aparcPeaks <- aparcPeaks %>%
+    arrange(HumanRanked)
+
+  labelData <- aparcPeaks %>%
+    arrange(MacaqueRanked)
+
+  plot <- ggplot(data=aparcPeaks, aes(x=HumanRanked, y=MacaqueRanked, color = MesulamNames)) +
+    geom_point(size=3) +
+    scale_x_continuous(
+      breaks = seq(1, 36),
+      labels = aparcPeaks$AparcNames
+      ) +
+    scale_y_continuous(
+      breaks = seq(1, 36),
+      labels = labelData$AparcNames
+    ) +
+    scale_color_manual(values=c(
+      "Paralimbic" = '#83B540',
+      "High-order Association" = '#F5A190',
+      "Modality-specific Association" = '#F2F45D',
+      "Idiotypic (primary)" = '#7C9ECF'
+      )) +
+    labs(color = "Mesulam Regions") +
+    new_scale_color() +
+    geom_segment(
+      data = aparcPeaks,
+      aes(x = HumanRanked, xend = HumanRanked, y = MacaqueRanked, yend = HumanRanked, colour=RankDiff),
+      size = 0.8,
+      alpha=0.8,
+      linetype = "dashed",
+      show.legend = FALSE
+      ) +
+    scale_color_gradientn(
+      colors = c("blue","gray", "red"),
+      limits = c(-20, 20),
+      oob = scales::squish,
+      name="Prop. Rank Difference"
+    ) +
+    xlab("Human") +
+    ylab("Macaque") +
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "black") +
+    theme_classic() +
+    ggtitle(type) +
+    ggeasy::easy_center_title() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      plot.title = element_text(size = 16, face = "bold"),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 14),
+      legend.key.size = unit(2, "lines")
+    )
+
+  return(plot)
+}
+vol <- generateRankedMapping(aparcPeaks$Volume, "Volume")
+area <- generateRankedMapping(aparcPeaks$Area, "Area")
+thickness <- generateRankedMapping(aparcPeaks$Thickness, "Thickness")
+plot <- vol + area + thickness +
+  plot_layout(
+    guides = "collect",
+    axis_titles = "collect",
+  ) & theme(
+    legend.position = "bottom"
+  )
+ggsave(plot=plot, file.path("Figure3Images/DifferenceMaps/RankedSummary.png"), width=20, height=6, dpi=300)
+```
+
+```{r}
+Visualize.Surface <- function(lh_data, rh_data, species, parcellation, save_location, color_map, color_range_min, color_range_max) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release")
+  write.table(lh_data, "Plotting/temp_lh_data.csv", col.names = FALSE, row.names = FALSE)
+  write.table(rh_data, "Plotting/temp_rh_data.csv", col.names = FALSE, row.names = FALSE)
+  system(paste("python3", "Plotting/Surface.Plotting.py", parcellation, species, save_location, color_map, color_range_min, color_range_max, "Plotting/temp_lh_data.csv", "Plotting/temp_rh_data.csv", sep = " "))
+}
+## Function for mapping the ranking onto the surface
+mapRankSurface <- function(aparcPeaks, type, color) {
+  aparcPeaks$MacaqueRanked <- rank(aparcPeaks$Macaque)
+  aparcPeaks$HumanRanked <- rank(aparcPeaks$Human)
+  aparcPeaks$RankDiff <- aparcPeaks$HumanRanked - aparcPeaks$MacaqueRanked
+  savePathMacaque <- file.path("Plotting/Final/Figure3Images/DifferenceMaps", paste0("M.", type, "MacaqueRanked.png"))
+  savePathHuman <- file.path("Plotting/Final/Figure3Images/DifferenceMaps", paste0("M.", type, "HumanRanked.png"))
+  savePathDiff <- file.path("Plotting/Final/Figure3Images/DifferenceMaps", paste0("M.", type, "DiffRanked.png"))
+  macaqueVals <- aparcPeaks$MacaqueRanked
+  humanVals <- aparcPeaks$HumanRanked
+  diffVals <- aparcPeaks$RankDiff
+  Visualize.Surface(macaqueVals, macaqueVals, "human", "aparc", savePathMacaque, color, 0, 36)
+  Visualize.Surface(humanVals, humanVals, "human", "aparc", savePathHuman, color, 0, 36)
+  Visualize.Surface(diffVals, diffVals, "human", "aparc", savePathDiff, "coolwarm", -20, 20)
+}
+
+mapRankSurface(aparcPeaks[["Volume"]], "Volume", "Reds")
+mapRankSurface(aparcPeaks[["Area"]], "Area", "Reds")
+mapRankSurface(aparcPeaks[["Thickness"]], "Thickness", "Reds")
+```
+
+```{r}
+## Generate the difference maps (after normalizing for some global metric peak)
+Visualize.Surface <- function(lh_data, rh_data, species, parcellation, save_location, color_map, color_range_min, color_range_max) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release")
+  write.table(lh_data, "Plotting/temp_lh_data.csv", col.names = FALSE, row.names = FALSE)
+  write.table(rh_data, "Plotting/temp_rh_data.csv", col.names = FALSE, row.names = FALSE)
+  system(paste("python3", "Plotting/Surface.Plotting.py", parcellation, species, save_location, color_map, color_range_min, color_range_max, "Plotting/temp_lh_data.csv", "Plotting/temp_rh_data.csv", sep = " "))
+}
+
+createVisualization <- function(MVal, measure, color_map, color_range_min, color_range_max, species, parcellation) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Plotting/Final")
+  savePath <- file.path("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Plotting/Final/Figure3Images/DifferenceMaps/aparc", paste(measure, "ranked", sep="_"))
+  MSP <- paste(savePath, "M.png", sep="_")
+  Visualize.Surface(MVal, MVal, species, parcellation, MSP, color_map, color_range_min, color_range_max)
+}
+
+createMacaquePeakGifti <- function(Val, measure) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Plotting/Final")
+  write.table(Val, "Figure3Scripts/temp_Val.csv", col.names=FALSE, row.names=FALSE)
+  system(paste("python3", "Figure3Scripts/mapToSurface.py", "--lh-csv", "Figure3Scripts/temp_Val.csv", "--rh-csv", "Figure3Scripts/temp_Val.csv", "--parcellation", "aparc", "--save-prefix", paste0("Figure3Data/MacaquePeaksInHuman/aparc/DifferenceMaps/", "M.Ranked.", measure)))
+}
+
+generateDifferenceMaps <- function(aparcPeaks, type) {
+  aparcPeaks$MacaqueRanked <- rank(aparcPeaks$Macaque)
+  aparcPeaks$HumanRanked <- rank(aparcPeaks$Human)
+  aparcPeaks$RankDiff <- aparcPeaks$HumanRanked - aparcPeaks$MacaqueRanked
+  aparcPeaks$Difference[1] <- 0
+  createMacaquePeakGifti(aparcPeaks$RankDiff, type)
+  createVisualization(aparcPeaks$RankDiff, type, "coolwarm", -20, 20, "human", "aparc")
+  return(aparcPeaks)
+}
+
+aparcPeaks[["Volume"]] <- generateDifferenceMaps(aparcPeaks[['Volume']], "Volume")
+aparcPeaks[["Area"]] <- generateDifferenceMaps(aparcPeaks[['Area']], "Area")
+aparcPeaks[["Thickness"]] <- generateDifferenceMaps(aparcPeaks[['Thickness']], "Thickness")
+```
+
+```{r}
+system(paste("bash", "Figure3Scripts/metric2volume_RC.sh"))
+```
+
+```{r}
+lh_aparc <- "../../Atlas/aparc/fs_LR.aparc.L.32k.func.gii"
+rh_aparc <- "../../Atlas/aparc/fs_LR.aparc.R.32k.func.gii"
+base_metric_path <- "Figure3Data/MacaquePeaksInHuman/aparc/DifferenceMaps"
+n_terms <- 200
+n_studies <- 10
+
+system(paste("python3", "Figure3Scripts/image_search.py",
+             "--image-path", file.path(base_metric_path, "volumes", "M.Ranked.Volume.nii.gz"),
+             "--n-studies", n_studies,
+             "--n-terms", n_terms,
+             "--pos-neg",
+             "--bins", 4,
+             "--output", file.path(base_metric_path, "neuroquery", "M.Volume.Ranked")))
+system(paste("python3", "Figure3Scripts/image_search.py",
+             "--image-path", file.path(base_metric_path, "volumes", "M.Ranked.Area.nii.gz"),
+             "--n-studies", n_studies,
+             "--n-terms", n_terms,
+             "--pos-neg",
+             "--bins", 4,
+             "--output", file.path(base_metric_path, "neuroquery", "M.Area.Ranked")))
+system(paste("python3", "Figure3Scripts/image_search.py",
+             "--image-path", file.path(base_metric_path, "volumes", "M.Ranked.Thickness.nii.gz"),
+             "--n-studies", n_studies,
+             "--n-terms", n_terms,
+             "--pos-neg",
+             "--bins", 4,
+             "--output", file.path(base_metric_path, "neuroquery", "M.Thickness.Ranked")))
+```
+
+```{r}
+## Visualize markov parcellation
+lh_data <- seq(1, 92, by=1)
+rh_data <- seq(1, 92, by=1)
+Visualize.Surface(lh_data, rh_data, "monkey", "markov", "Plotting/Final/Figure3Images/Markov_parcellation.png", "tab20b", 1, 92)
+```

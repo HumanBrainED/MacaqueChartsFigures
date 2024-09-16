@@ -1,0 +1,511 @@
+Figure 1: Phenotype trajectories
+Human/macaque lifespan comparison, site boxplot
+Four global brain phenotypes, including:
+Trajectory plots with data points (with comparative human plots)
+Centile distributions
+Parametric confidence interval trajectories
+Growth rate per day
+Site specific trajectories(?)
+
+TO DO:
+Check Ting message for updates
+Fix the insert of human plots (make bigger)
+
+```{r}
+## Load in all the data into LARGE
+## ASEG.VOLUME
+## TotalGrayVol, CorticalWhiteMatterVol, SubCortGrayVol, Total.Lateral.Ventricle
+
+loadPhenotype <- function(phenotype_list) {
+  LARGE <- list()
+  for (pheno in phenotype_list) {
+    PRIMARY <- list()
+    PRIMARY$SUBSET <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", pheno, "SUBSET.rds"))
+    PRIMARY$FIT.EXTRACT <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", pheno, "FIT.EXTRACT.rds"))
+    PRIMARY$MODEL <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", pheno, "MODEL.rds"))
+    PRIMARY$BOOT.FIT <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", pheno, "BOOT.FIT.rds"))
+    PRIMARY$SITE.CURVE <- readRDS(file.path("../../../BrainChartsCode/PRIME-DE-Lifespan/RDS/ASEG.VOLUME.COMBAT", pheno, "SITE.CURVES.rds"))
+    LARGE[[pheno]] <- PRIMARY
+  }
+  return(LARGE)
+}
+
+phenotype_list <- c("TotalGrayVol", "CorticalWhiteMatterVol", "SubCortGrayVol", "Total.Lateral.Ventricle")
+LARGE <- loadPhenotype(phenotype_list)
+```
+
+SCATTERPLOT ONLY FUNCTION
+
+```{r}
+## Distribution age and sex
+library(ggplot2)
+plot <- ggplot(LARGE[["TotalGrayVol"]]$SUBSET, aes(x=LogAge, fill=Sex)) +
+  geom_density(alpha = 0.5) +
+  theme_classic() +
+  scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr")
+    ) +
+  ylab("") +
+  scale_fill_manual(values = c("M" = "#247BA0", "F" = "#E3170A"))
+
+mean_age_male <- mean(LARGE[["TotalGrayVol"]]$SUBSET$LogAge[LARGE[["TotalGrayVol"]]$SUBSET$Sex == "M"], na.rm = TRUE)
+mean_age_female <- mean(LARGE[["TotalGrayVol"]]$SUBSET$LogAge[LARGE[["TotalGrayVol"]]$SUBSET$Sex == "F"], na.rm = TRUE)
+
+plot <- plot +
+  annotate(
+    "text",
+    x = Inf, y = 0.7,
+    label = paste("Males: ", sum(LARGE[["TotalGrayVol"]]$SUBSET$Sex == "M")),
+    hjust = 1, vjust = 0,
+    color = "black"  # Adjust the color to match the "M" color
+  ) +
+  annotate(
+    "text",
+    x = Inf, y = 0.75,
+    label = paste("Females: ", sum(LARGE[["TotalGrayVol"]]$SUBSET$Sex == "F")),
+    hjust = 1, vjust = 1,
+    color = "black"  # Adjust the color to match the "F" color
+  ) +
+  geom_vline(xintercept = mean_age_male, linetype = "dashed", color = "#247BA0", size = 1) +
+  geom_vline(xintercept = mean_age_female, linetype = "dashed", color = "#E3170A", size = 1)
+
+plot
+```
+
+```{r}
+## Now write functions to generate the plots themselves
+library(ggplot2)
+Scatterplot <- function(LARGE, measure, label) {
+  PRIMARY <- LARGE[[measure]]
+  PRIMARY$SUBSET$LogAge <- log(PRIMARY$SUBSET$AgeTransformed)
+  PRIMARY$SUBSET$mL.scaled <- PRIMARY$SUBSET[[measure]] / 1000
+  scatterplot <- ggplot() +
+    geom_point(data = PRIMARY$SUBSET, aes_string(x = "LogAge", y = "mL.scaled", color = "Sex"), alpha = 0.5) +
+    scale_colour_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    scale_fill_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    theme_classic() +
+    scale_y_continuous(expand = expansion(mult = c(0.05, .05))) +
+    xlab("") +
+    ylab(" mL") +
+    ggtitle(label) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size=12),
+      axis.text.y = element_text(size=12),
+      legend.text = element_text(size = 18),
+      legend.title = element_text(size = 18)
+    ) +
+    ggeasy::easy_center_title() +
+    guides(color = guide_legend(override.aes = list(size = 4)))
+
+
+  ## Add breaks
+  scatterplot <- scatterplot + scale_x_continuous(
+      breaks = c(log((constant)), log((5 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant), log((10) + constant), log((30) + constant)),
+      labels = c("Birth", "5m", "1yr", "3yr", "6yr", "10yr", "30yr")
+  )
+
+  ## Add vline
+  scatterplot <- scatterplot +
+      geom_vline(xintercept = log((constant)), alpha = 0.65, color = "gray", linetype = "dashed") +
+      geom_vline(xintercept = log((6) + constant), alpha = 0.65, color = "gray", linetype = "dashed")
+
+  return(scatterplot)
+}
+
+```
+
+TESTING SCATTERPLOT FUNCTION
+
+```{r}
+plot <- Scatterplot(LARGE, "Total.Lateral.Ventricle")
+plot
+```
+
+CURVE WITH CENTILES FUNCTION
+
+```{r}
+Plot.Curve.Centiles <- function(LARGE, measure) {
+  PRIMARY <- LARGE[[measure]]
+  PRIMARY$SUBSET$LogAge <- log(PRIMARY$SUBSET$AgeTransformed)
+  minage <- min(PRIMARY$SUBSET$AgeTransformed)
+
+  ## Bind fit
+  PRIMARY$CURVE <- Apply.Param(
+    NEWData = rbind(
+      expand.grid(list(AgeTransformed = seq(minage, 35, by = 0.01), Sex = "F")),
+      expand.grid(list(AgeTransformed = seq(minage, 35, by = 0.01), Sex = "M"))
+    ),
+    FITParam = PRIMARY$FIT.EXTRACT$param
+  )
+  PRIMARY$CURVE$LogAge <- log(PRIMARY$CURVE$AgeTransformed)
+  PEAK.AGE <- PRIMARY$CURVE %>%
+    group_by(Sex) %>%
+    summarise(curvePeakAge = LogAge[which.max(PRED.m500.pop)],
+              curvePeak = max(PRED.m500.pop),
+              growthPeakAge = LogAge[which.max(diff(PRED.m500.pop))],
+              growthPeakAgeNonTransformed = AgeTransformed[which.max(diff(PRED.m500.pop))] - 0.452,
+              growthPeak = PRED.m500.pop[which.max(diff(PRED.m500.pop))],
+              curvePeakAgeNonTransformed = AgeTransformed[which.max(PRED.m500.pop)] - 0.452,
+              agingPeak = PRED.m500.pop[which.min(diff(PRED.m500.pop))],
+              agingPeakAge = LogAge[which.min(diff(PRED.m500.pop))],
+              agingPeakAgeNonTransformed = AgeTransformed[which.min(diff(PRED.m500.pop))] - 0.452)
+
+  PRIMARY$CURVE$PRED.mean.pop.mL <- PRIMARY$CURVE$PRED.m500.pop / 1000
+  PRIMARY$CURVE$PRED.l025.pop.mL <- PRIMARY$CURVE$PRED.l025.pop / 1000
+  PRIMARY$CURVE$PRED.u975.pop.mL <- PRIMARY$CURVE$PRED.u975.pop / 1000
+  PEAK.AGE$curvePeakmL <- PEAK.AGE$curvePeak / 1000
+
+  scatterplot <- ggplot() +
+    geom_line(data = PRIMARY$CURVE, aes_string(x ="LogAge", y = "PRED.mean.pop.mL", color = "Sex"), size = 1.5) +
+    geom_line(data = PRIMARY$CURVE, aes_string(x = "LogAge", y = "PRED.l025.pop.mL", color = "Sex"), linetype = "dotted", size = 1, alpha = 0.6) +
+    geom_line(data = PRIMARY$CURVE, aes_string(x = "LogAge", y = "PRED.u975.pop.mL", color = "Sex"), linetype = "dotted", size = 1, alpha = 0.6) +
+    geom_point(data = PEAK.AGE, aes(x=curvePeakAge, y=curvePeakmL, color=Sex), size=5, alpha=0.8) +
+    scale_colour_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    scale_fill_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    theme_classic() +
+    scale_y_continuous(expand = expansion(mult = c(0.05, .05))) +
+    xlab("") +
+    ylab("mL") +
+    theme(legend.position = "none") +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust=1, size=12),
+      axis.text.y = element_text(size=12))
+
+  ## Add breaks
+  scatterplot <- scatterplot + scale_x_continuous(
+      breaks = c(log((constant)), log((5 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant), log((10) + constant), log((30) + constant)),
+      labels = c("Birth", "5m", "1yr", "3yr", "6yr", "10yr", "30yr")) +
+      geom_vline(xintercept = log((constant)), alpha = 0.65, color = "gray", linetype = "dashed") +
+      geom_vline(xintercept = log((6) + constant), alpha = 0.65, color = "gray", linetype = "dashed")
+
+  if (measure == "TotalGrayVol") {
+    scatterplot <- scatterplot +
+      ggtitle("Normative trajectories")
+  }
+
+  return(scatterplot)
+}
+```
+
+TESTING CENTILE FUNCTION
+
+```{r}
+centile <- Plot.Curve.Centiles(LARGE, "Total.Lateral.Ventricle")
+centile
+```
+
+PARAMETRIC CONFIDENCE INTERVAL PLOT
+
+```{r}
+Bootstrap.Curve <- function(LARGE, measure) {
+  PRIMARY <- LARGE[[measure]]
+  PRIMARY$BOOT.FIT$LogAge <- log(PRIMARY$BOOT.FIT$AgeTransformed)
+  PRIMARY$BOOT.FIT$PRED.mean.pop.lower.mL <- PRIMARY$BOOT.FIT$PRED.mean.pop.lower / 1000
+  PRIMARY$BOOT.FIT$PRED.mean.pop.upper.mL <- PRIMARY$BOOT.FIT$PRED.mean.pop.upper / 1000
+  PRIMARY$BOOT.FIT$PRED.mean.pop.mL <- PRIMARY$BOOT.FIT$PRED.mean.pop / 1000
+
+  scatterplot <- ggplot(data=PRIMARY$BOOT.FIT) +
+    scale_colour_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    scale_fill_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    theme_classic() +
+    scale_y_continuous(expand = expansion(mult = c(0.05, .05))) +
+    xlab("") +
+    ylab("mL ") +
+    theme(legend.position = "none") +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size=8),
+      axis.text.y = element_text(size=12),
+      panel.background = element_rect(fill = "transparent"),
+      plot.background = element_rect(fill = "transparent")
+      ) +
+    scale_x_continuous(
+      breaks = c(log((constant)), log((5 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant), log((10) + constant), log((30) + constant)),
+      labels = c("Birth", "5m", "1yr", "3yr", "6yr", "10yr", "30yr")
+    ) +
+    geom_vline(xintercept = log((constant)), alpha = 0.65, color = "gray", linetype = "dashed") +
+    geom_vline(xintercept = log((6) + constant), alpha = 0.65, color = "gray", linetype = "dashed")
+
+  scatterplot <- scatterplot +
+    geom_ribbon(aes_string(x = "LogAge", ymin = "PRED.mean.pop.lower.mL", ymax = "PRED.mean.pop.upper.mL", fill = "Sex", alpha=0.2)) +
+    geom_line(aes_string(x = "LogAge", y = "PRED.mean.pop.mL", color = "Sex"), size = 1.5)
+
+  return(scatterplot)
+}
+
+Site.Curve <- function(LARGE, measure) {
+  library(pals)
+
+  SITE.CURVE <- LARGE[[measure]]$SITE.CURVE
+  PLOTTING.DF <- cbind(cat=rep(names(SITE.CURVE), sapply(SITE.CURVE, nrow)), do.call(rbind, SITE.CURVE))
+  PLOTTING.DF$PRED.m500.wre.scaled <- PLOTTING.DF$PRED.m500.wre / 1000
+
+  scatterplot <- ggplot(
+      data=subset(PLOTTING.DF, Sex=="M"),
+      aes(x=LogAge, y=PRED.m500.wre.scaled, color=Site)
+      ) +
+      geom_line(size=1)
+
+  scatterplot <- scatterplot +
+      theme_classic() +
+      scale_y_continuous(expand = expansion(mult = c(0.05, .05))) +
+      xlab("") +
+      ylab("mL ") +
+      #scale_color_manual(values = c(unname(kelly()), "darkblue")) +
+      #scale_color_manual(values = unname(cols25())) +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust=1, size=12),
+        axis.text.y = element_text(size=12),
+        legend.position = "none"
+        )
+
+    scatterplot <- scatterplot + scale_x_continuous(
+          breaks = c(log((constant)), log((5 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant), log((10) + constant), log((30) + constant)),
+            labels = c("Birth", "5m", "1yr", "3yr", "6yr", "10yr", "30yr")) +
+        geom_vline(xintercept = log((constant)), alpha = 0.65, color = "gray", linetype = "dashed") +
+        geom_vline(xintercept = log((6) + constant), alpha = 0.65, color = "gray", linetype = "dashed")
+
+    if (measure == "TotalGrayVol") {
+      scatterplot <- scatterplot +
+        ggtitle("Site specific curves")
+    }
+
+    return(scatterplot)
+}
+
+
+bootstrap <- Bootstrap.Curve(LARGE, "TotalGrayVol")
+```
+
+GROWTH RATE FUNCTION
+
+```{r}
+Growth.Rate <- function(LARGE, measure) {
+  source("../../300.variables.r")
+  source("../../301.functions.r")
+  PRIMARY <- LARGE[[measure]]
+  mean_male <- mean(PRIMARY$SUBSET[PRIMARY$SUBSET$Sex == "M", measure])
+  sd_male <- sd(PRIMARY$SUBSET[PRIMARY$SUBSET$Sex == "M", measure])
+  mean_female <- mean(PRIMARY$SUBSET[PRIMARY$SUBSET$Sex == "F", measure])
+  sd_female <- sd(PRIMARY$SUBSET[PRIMARY$SUBSET$Sex == "F", measure])
+  minage <- min(PRIMARY$SUBSET$AgeTransformed)
+  PRIMARY$SUBSET$LogAge <- log(PRIMARY$SUBSET$AgeTransformed)
+  PRIMARY$CURVE <- Apply.Param(
+    NEWData = rbind(
+      expand.grid(list(AgeTransformed = seq(minage, 35, by = 0.002), Sex = "F")),
+      expand.grid(list(AgeTransformed = seq(minage, 35, by = 0.002), Sex = "M"))
+    ),
+    FITParam = PRIMARY$FIT.EXTRACT$param
+  )
+  PRIMARY$HOLDER <- data.frame(
+                      AgeTransformed = PRIMARY$CURVE$AgeTransformed,
+                      LogAge = log(PRIMARY$CURVE$AgeTransformed),
+                      Sex = PRIMARY$CURVE$Sex,
+                      feature = PRIMARY$CURVE$PRED.m500.pop
+                      )
+  #PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "F"] <- ((PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "F"] - mean_female) / sd_female)
+  #PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "M"] <- ((PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "M"] - mean_male) / sd_male)
+  #slopes_female <- c(NA, diff(PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "F"]) / diff(PRIMARY$HOLDER$LogAge[PRIMARY$HOLDER$Sex == "F"]))
+  #slopes_male <- c(NA, diff(PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "M"]) / diff(PRIMARY$HOLDER$LogAge[PRIMARY$HOLDER$Sex == "M"]))
+  slopes_female <- c(NA, diff(PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "F"]))
+  slopes_male <- c(NA, diff(PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "M"]))
+  PRIMARY$HOLDER$slopes <- c(slopes_female, slopes_male)
+  female_peak_index <- which.max(PRIMARY$HOLDER$slopes[PRIMARY$HOLDER$Sex == "F"])
+  female_crossing_age <- PRIMARY$HOLDER$AgeTransformed[PRIMARY$HOLDER$Sex == "F"][female_peak_index]
+  plot <- ggplot(PRIMARY$HOLDER, aes(LogAge, slopes, color = Sex)) +
+    geom_point(size = 0.5) +
+    geom_vline(xintercept = log(female_crossing_age)) +
+    geom_vline(xintercept = log((constant)), alpha = 0.65, color = "gray", linetype = "dashed") +
+    geom_vline(xintercept = log((6) + constant), alpha = 0.65, color = "gray", linetype = "dashed") +
+    geom_hline(yintercept = 0) +
+    scale_x_continuous(
+      breaks = c(log((constant)), log((5 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant), log((10) + constant), log((30) + constant)),
+      labels = c("Birth", "5m", "1yr", "3yr", "6yr", "10yr", "30yr")) +
+    scale_colour_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    scale_fill_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    theme_classic() +
+    xlab("") +
+    ylab("mm^3 per day") +
+    theme(legend.position = "none") +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust=1, size=12),
+      axis.text.y = element_text(size=12)
+      )
+
+  if (measure == "TotalGrayVol") {
+    plot <- plot +
+      ggtitle("Growth rate per day")
+  }
+
+  return(plot)
+}
+```
+
+TESTING GROWTH PLOT
+
+```{r}
+growth <- Growth.Rate(LARGE, "TotalGrayVol")
+growth
+```
+
+DEMOGRAPHIC BOX PLOT
+
+```{r}
+Plot.Boxplot.Demographics <- function(WORKING.DF) {
+
+  custom_theme <- theme(
+    panel.background = element_rect(fill = "white"),
+    plot.background = element_rect(fill = "white"),
+    axis.text = element_text(size = 10, color = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 10, color = "black"),
+    axis.line = element_line(size = 0.5, color = "black"),
+    axis.title = element_text(size = 12, color = "black"),
+    legend.title = element_blank(),
+    plot.title = element_text(size = 14, color = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "none"
+  )
+
+  age_distribution <- ggplot() +
+    geom_boxplot(data = WORKING.DF, aes(x = reorder(Site, Age), y = Age, color = Sex)) +
+    geom_point(data = WORKING.DF, aes(x = reorder(Site, Age), y = Age, color = Sex),
+               position = position_jitterdodge(dodge.width = 0.75, jitter.width = 0.2), alpha = 0.5) +
+    labs(x = "", y = "") +
+    scale_y_continuous(
+      breaks=c(0, 3, 6, 10, 20, 30),
+      labels=c("Birth", "3yr", "6yr", "10yr", "20yr", "30yr")
+    ) +
+    scale_colour_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    scale_fill_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    custom_theme +
+    coord_cartesian(clip = "off", expand = 0.1) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.65, color = "gray") +
+    geom_hline(yintercept = 3, linetype = "dashed", alpha = 0.65, color = "gray") +
+    geom_hline(yintercept = 6, linetype = "dashed", alpha = 0.65, color = "gray") +
+    geom_hline(yintercept = 10, linetype = "dashed", alpha = 0.65, color = "gray") +
+    geom_hline(yintercept = 20, linetype = "dashed", alpha = 0.65, color = "gray") +
+    geom_hline(yintercept = 30, linetype = "dashed", alpha = 0.65, color = "gray")
+
+  return(age_distribution)
+}
+```
+
+TESTING DEMOGRAPHIC BOX PLOT
+
+```{r}
+plot <- Plot.Boxplot.Demographics(LARGE[[1]]$SUBSET)
+plot
+```
+
+FUNCTION FOR ADDING IN THE HUMAN PLOTS
+
+```{r}
+addHumanPlot <- function(imgPath, plot, xmin, xmax, ymin, ymax) {
+  img <- rasterGrob(readPNG(imgPath), width = unit(1, "npc"), height = unit(1, "npc"))
+  plot <- plot +
+    annotation_custom(img, xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax) +
+    geom_rect(
+      aes(xmin = xmin-0.05, xmax = xmax, ymin = ymin, ymax = ymax),
+      fill = NA,
+      color = "black",
+      linetype = "dotted"
+    )
+  return(plot)
+}
+```
+
+FUNCTION TO PATCHWORK LIFESPAN AND BOXPLOT
+
+```{r}
+firstRow <- function(LARGE) {
+  lifespan_img <- rasterGrob(readPNG("Figure1Images/lifespan_edit.png"), width = unit(1, "npc"), height = unit(1, "npc"))
+  lifespan_plot <- ggplot(data.frame(x = 1:100, y = 1:10), aes(x, y)) +
+    theme_void() +
+    annotation_custom(lifespan_img, xmin = -Inf, xmax = Inf, ymin = 0, ymax = 0.65) +
+    xlab("") +
+    ylab("")
+
+  boxplot <- Plot.Boxplot.Demographics(LARGE[[1]]$SUBSET)
+  plot <- lifespan_plot + boxplot
+  return(plot)
+}
+```
+
+ADDING PLOTS TOGETHER WITH PATCHWORK
+
+```{r}
+library(patchwork)
+library(png)
+library(ggplot2)
+library(grid)
+
+plots <- list()
+colnames <- c("Gray Matter Vol.", "Cortical White Matter Vol.", "Sub Cortical Gray Matter Vol.", "Lateral Ventricular Vol.")
+
+for (i in 1:4) {
+  for (j in 1:4) {
+    if (j == 1) {
+      plots[[i + 4 * (j - 1)]] <- Scatterplot(LARGE, names(LARGE[i]), colnames[i])
+    } else if (j == 2) {
+      plots[[i + 4 * (j - 1)]] <- Plot.Curve.Centiles(LARGE, names(LARGE[i]))
+    } else if (j == 3) {
+      plots[[i + 4 * (j - 1)]] <- Site.Curve(LARGE, names(LARGE[i]))
+      ## ALSO ADD HUMAN PLOTS
+      #if (i == 1) {
+      #  plots[[i + 4 * (j - 1)]] <- addHumanPlot("Figure1Images/totalgrayvol.png", plots[[i + 4 * (j - 1)]], 1.2, 3.3, 0.3, 34)
+      #} else if (i == 2) {
+      #  plots[[i + 4 * (j - 1)]] <- addHumanPlot("Figure1Images/corticalwhitemattervol.png", plots[[i + 4 * (j - 1)]], 1.3, 3.4, 0.3, 18.5)
+      #} else if (i == 3) {
+      #  plots[[i + 4 * (j - 1)]] <- addHumanPlot("Figure1Images/subcortgrayvol.png", plots[[i + 4 * (j - 1)]], 0.9, 2.7, 4.1, 5.9)
+      #} else if (i == 4) {
+      #  plots[[i + 4 * (j - 1)]] <- addHumanPlot("Figure1Images/ventriclevol.png", plots[[i + 4 * (j - 1)]], -0.8, 1.3, 0.5, 0.85)
+      #}
+    } else if (j == 4) {
+      plots[[i + 4 * (j - 1)]] <- Growth.Rate(LARGE, names(LARGE[i]))
+    }
+  }
+}
+
+# Set up the first grid with patchwork
+plots_patchwork <- wrap_plots(
+  grobs = plots,
+  ncol = 4,
+  nrow = 4,
+  widths = rep(1, 4),
+  heights = rep(1, 4),
+  align = "v"
+)
+
+# Add trajectory patchwork
+Row2 <- plots_patchwork +
+  plot_layout(
+    axis_titles = "collect",
+    guides = "collect",
+  )
+
+ggsave(plot=Row2, file.path("Figure1Images/charts.pdf"), width=16, height=8, dpi=500)
+#ggsave(plot=Plot.Boxplot.Demographics(LARGE[[1]]$SUBSET), file.path("Figure1Images/boxplot.pdf"), width=7, height=4, dpi=500)
+
+# Add lifespan and boxplot patchwork
+#Row1 <- firstRow(LARGE)
+
+#plots_patchwork <- Row1 / Row2 +
+#  plot_layout(
+#    nrow=2, heights=c(1, 3),
+#    guides = "collect"
+#  ) &
+#  theme(
+#    axis.text.x = element_text(size=10),
+#    axis.text.y = element_text(size=10)
+#  )
+
+plots_patchwork <- plots_patchwork +
+  plot_annotation(
+    tag_levels = list(c("a)", "", "b)"))
+  ) &
+  theme(plot.tag = element_text(size = 18))
+
+#ggsave("Figure1.pdf", plots_patchwork, width = 16, height = 12, dpi=500)
+```

@@ -1,0 +1,254 @@
+File for running and comparing ComBAT to GAMLSS and no batch correction.
+For this I have to "demographically harmonize" the data I use beforehand. 
+This means I will have to choose data from around the same age across different sites (with similar distributions).
+
+```{r}
+loadData <- function() {
+  metrics <- c("TotalGrayVol", "CorticalWhiteMatterVol", "SubCortGrayVol", "Total.Lateral.Ventricle")
+  HOLDER <- list()
+  for (metric in metrics) {
+    HOLDER[[metric]]$SUBSET <- readRDS(file.path("../../RDS/ASEG.VOLUME", metric, "SUBSET.rds"))
+    HOLDER[[metric]]$FIT.EXTRACT <- readRDS(file.path("../../RDS/ASEG.VOLUME", metric, "FIT.EXTRACT.rds"))
+    HOLDER[[metric]]$CURVE <- Apply.Param(
+      NEWData = HOLDER[[metric]]$SUBSET,
+      FITParam = HOLDER[[metric]]$FIT.EXTRACT$param,
+      Add.Normalise = TRUE,
+      Add.Derivative = FALSE
+    )
+  }
+  return(HOLDER)
+}
+PRIMARY <- loadData()
+```
+
+```{r}
+## Start by visualizing all data to select the right sites and age ranges
+ggplot(data=subset(PRIMARY$TotalGrayVol$SUBSET, Sex == "M"), aes(x=Site, y=Age, fill=Site)) +
+  geom_boxplot() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+```{r}
+## Choose some sites with a realtively similar distribution
+data <- PRIMARY$TotalGrayVol$SUBSET %>%
+  filter(Sex == "M", Site %in% c("site-amu", "site-amu-2", "site-sbri", "site-uwo", "site-mountsinai-S", "site-ion", "site-oxford", "site-mountsinai-P", "site-uwmadison"))
+anova_result <- oneway.test(Age ~ Site, data = data)
+plot <- ggplot(data=data, aes(x=Site, y=Age, fill=Site)) +
+  geom_boxplot() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+plot <- plot + annotate(
+  "text",
+  x = 5,
+  y = max(data$Age) - 1,
+  label = paste("ANOVA p-value: ", format(anova_result$p.value, digits = 3)),
+  size = 5,
+  vjust = -1
+)
+
+plot
+```
+
+```{r}
+## Visualize the phenotype distribution
+lm_model <- lm(TotalGrayVol ~ Site, data = data)
+
+# Perform ANOVA on the linear model
+anova_result <- anova(lm_model)
+
+# Create boxplot
+plot <- ggplot(data = data, aes(x = Site, y = TotalGrayVol, fill = Site)) +
+  geom_boxplot() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Add ANOVA p-value as annotation
+plot <- plot + annotate(
+  "text",
+  x = 2,
+  y = max(data$TotalGrayVol) - 1500,
+  label = paste("ANOVA p-value: ", format(anova_result$"Pr(>F)"[1], digits = 3)),
+  size = 5,
+  vjust = -1
+)
+
+plot
+```
+```{r}
+print(anova_result)
+```
+```{r}
+## Now do some ComBat batch removal
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("sva")
+BiocManager::install("bladderbatch")
+library(sva)
+library(dplyr)
+```
+```{r}
+## Bind all the SUBSETs together
+PRIMARY <- lapply(PRIMARY, function(X) {
+  X$SUBSET <- X$SUBSET %>%
+    filter(Sex == "M", Site %in% c("site-amu", "site-amu-2", "site-sbri", "site-uwo", "site-mountsinai-S", "site-ion", "site-oxford", "site-mountsinai-P", "site-uwmadison"))
+  return(X)
+})
+ComBat_data <- merge(
+  PRIMARY$TotalGrayVol$SUBSET, 
+  PRIMARY$CorticalWhiteMatterVol$SUBSET[, c("Subject", "Session", "CorticalWhiteMatterVol")], 
+  by=c("Subject", "Session"))
+ComBat_data <- merge(
+  ComBat_data,
+  PRIMARY$SubCortGrayVol$SUBSET[, c("Subject", "Session", "SubCortGrayVol")],
+  by=c("Subject", "Session")
+)
+ComBat_data <- merge(
+  ComBat_data,
+  PRIMARY$Total.Lateral.Ventricle$SUBSET[, c("Subject", "Session", "Total.Lateral.Ventricle")],
+  by=c("Subject", "Session")
+)
+```
+
+```{r}
+## Quickly check the Phenotype distribution
+getPhenotypeDist <- function(data, phenotype, title) {
+  # Run the linear model
+  lm_model <- lm(as.formula(paste0(phenotype, " ~ Site + Age")), data = data)
+  anova_result <- anova(lm_model)
+  # Create the plot 
+  plot <- ggplot(data=data, aes_string(x="Site", y=phenotype, fill="Site")) +
+    geom_boxplot() +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    ) +
+    labs(
+      title = title, 
+      subtitle = paste("ANOVA p-value: ", format(anova_result$"Pr(>F)"[1], digits = 3)), 
+      caption = NULL, 
+      tag = NULL
+    ) +
+    xlab("") +
+    ylab("") +
+    scale_fill_npg()
+  
+  return(plot)
+}
+
+GMV <- getPhenotypeDist(ComBat_data, "TotalGrayVol", "Gray Matter Volume")
+WMV <- getPhenotypeDist(ComBat_data, "CorticalWhiteMatterVol", "White Matter Volume")
+sGMV <- getPhenotypeDist(ComBat_data, "SubCortGrayVol", "Subcortical Gray Matter Volume")
+VENT <- getPhenotypeDist(ComBat_data, "Total.Lateral.Ventricle", "Ventricular Volume")
+
+plot <- (GMV - WMV) - (sGMV - VENT)
+ggsave(plot=plot, file.path("SupplementaryHarmonizationImages/BoxplotANOVA/RawVolume.png"), width=16, height=3)
+plot
+```
+```{r}
+## Run ComBat batch harmonization
+expression_names <- c("TotalGrayVol", "CorticalWhiteMatterVol", "SubCortGrayVol", "Total.Lateral.Ventricle")
+pheno <- ComBat_data[!(names(ComBat_data) %in% expression_names)]
+expr <- ComBat_data[(names(ComBat_data) %in% expression_names)]
+expr <- t(expr)
+colnames(expr) <- paste0(pheno$Subject, pheno$Session)
+rownames(pheno) <- paste0(pheno$Subject, pheno$Session)
+pheno$Site <- droplevels(pheno$Site)
+
+modcombat <- model.matrix(~1, data=pheno)
+batch_removed_combat <- ComBat(dat=as.matrix(expr), batch=pheno$Site, mod=modcombat, par.prior=TRUE, prior.plots=TRUE)
+```
+```{r}
+## Convert back to normal
+batch_removed_combat <- as.data.frame(t(batch_removed_combat))
+batch_removed_combat$ID <- rownames(batch_removed_combat)
+pheno$ID <- rownames(pheno)
+batch_removed_combat <- merge(pheno, batch_removed_combat, by="ID")
+```
+
+```{r}
+GMV_combat <- getPhenotypeDist(batch_removed_combat, "TotalGrayVol", "Gray Matter Volume")
+WMV_combat <- getPhenotypeDist(batch_removed_combat, "CorticalWhiteMatterVol", "White Matter Volume")
+sGMV_combat <- getPhenotypeDist(batch_removed_combat, "SubCortGrayVol", "Subcortical Gray Matter Volume")
+VENT_combat <- getPhenotypeDist(batch_removed_combat, "Total.Lateral.Ventricle", "Ventricular Volume")
+ComBat_boxplot <- (GMV_combat - WMV_combat) - (sGMV_combat - VENT_combat)
+ggsave(plot=ComBat_boxplot, file.path("SupplementaryHarmonizationImages/BoxplotANOVA/ComBatVolume.png"), width=16, height=3, dpi=300)
+ComBat_boxplot
+```
+ComBat does a good job at removing the Site batch effect. Now lets check to see if GAMLSS does a good job (or better).
+To do this, need to fit a new GAMLSS model based on the SUBSET from ComBat.
+ComBat model did not fit any age or sex effect, so we should do the same for GAMLSS fitting. 
+
+```{r}
+## This still includes a FakeAge term. If this doesnt remove the Site effect correctly, lets try removing it...
+source("../../301.functions.r")
+fit_models <- function(phenotypes, PRIMARY) {
+  for (phenotype in phenotypes) {
+    print(phenotype)
+    demographic_names <- names(PRIMARY[[phenotype]]$SUBSET)[!(names(PRIMARY[[phenotype]]$SUBSET) %in% phenotypes)]
+    data <- PRIMARY[[phenotype]]$SUBSET %>%
+      filter(Site %in% c("site-amu", "site-amu-2", "site-sbri", "site-uwo", "site-mountsinai-S", "site-ion", "site-oxford", "site-mountsinai-P", "site-uwmadison"))
+    data$Site <- droplevels(data$Site)
+    Fit.Model(phenotype, data, "ASEG.VOLUME.SUBSET.SUPPLEMENTARY", demographic_names)
+  }
+}
+phenotypes <- c("TotalGrayVol", "CorticalWhiteMatterVol", "SubCortGrayVol", "Total.Lateral.Ventricle")
+fit_models(phenotypes, PRIMARY)
+```
+
+```{r}
+GAMLSS_data <- list()
+for (phenotype in phenotypes) {
+  FIT.EXTRACT <- readRDS(file.path("RDS/ASEG.VOLUME.SUBSET.SUPPLEMENTARY", phenotype, "FIT.EXTRACT.rds"))
+  SUBSET <- readRDS(file.path("RDS/ASEG.VOLUME.SUBSET.SUPPLEMENTARY", phenotype, "SUBSET.rds"))
+  GAMLSS_data[[phenotype]] <- Apply.Param(
+    NEWData=SUBSET,
+    FITParam=FIT.EXTRACT$param,
+    Add.Normalise=TRUE,
+    Add.Derivative=FALSE 
+  )
+}
+
+GAMLSS_data <- lapply(GAMLSS_data, function(X) {
+  X <- X %>%
+    filter(Sex == "M")
+  return(X)
+})
+gam_data <- merge(
+  GAMLSS_data$TotalGrayVol, 
+  GAMLSS_data$CorticalWhiteMatterVol[, c("Subject", "Session", "CorticalWhiteMatterVol.normalised")], 
+  by=c("Subject", "Session"))
+gam_data <- merge(
+  gam_data,
+  GAMLSS_data$SubCortGrayVol[, c("Subject", "Session", "SubCortGrayVol.normalised")],
+  by=c("Subject", "Session")
+)
+gam_data <- merge(
+  gam_data,
+  GAMLSS_data$Total.Lateral.Ventricle[, c("Subject", "Session", "Total.Lateral.Ventricle.normalised")],
+  by=c("Subject", "Session")
+)
+```
+
+
+```{r}
+## Plot
+GMV_gamlss <- getPhenotypeDist(gam_data, "TotalGrayVol.normalised", "Gray Matter Volume")
+WMV_gamlss <- getPhenotypeDist(gam_data, "CorticalWhiteMatterVol.normalised", "Cortical White Matter Volume")
+sGMV_gamlss <- getPhenotypeDist(gam_data, "SubCortGrayVol.normalised", "Subcortical Gray Matter Volume")
+VENT_gamlss <- getPhenotypeDist(gam_data, "Total.Lateral.Ventricle.normalised", "Ventricular Volume")
+
+GAMLSS_boxplot <- (GMV_gamlss - WMV_gamlss) - (sGMV_gamlss - VENT_gamlss)
+ggsave(plot=GAMLSS_boxplot, file.path("SupplementaryHarmonizationImages/BoxplotANOVA/GAMLSSVolume.png"), width=16, height=3)
+GAMLSS_boxplot
+```
+
+

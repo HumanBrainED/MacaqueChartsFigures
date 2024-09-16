@@ -1,0 +1,880 @@
+Figure 3: Matched age plots and trajectories of phenotypes and extended phenotypes across the lifespan
+Macaque matched age group
+Surface plots of average brain values by region binned into the lifespan
+
+```{r}
+loadPhenotype <- function(phenotype_list) {
+  LARGE <- list()
+  for (pheno in phenotype_list) {
+    PRIMARY <- list()
+    PRIMARY$SUBSET <- readRDS(file.path("../../RDS", pheno, "SUBSET.rds"))
+    PRIMARY$FIT.EXTRACT <- readRDS(file.path("../../RDS", pheno, "FIT.EXTRACT.rds"))
+    PRIMARY$MODEL <- readRDS(file.path("../../RDS", pheno, "MODEL.rds"))
+    PRIMARY$BOOT.FIT <- readRDS(file.path("../../RDS", pheno, "BOOT.FIT.rds"))
+    LARGE[[pheno]] <- PRIMARY
+  }
+  names(LARGE) <- sapply(phenotype_list, function(X) { basename(X) })
+  return(LARGE)
+}
+
+phenotype_list <- c(
+  "ASEG.VOLUME.COMBAT/BrainSegVolNotVentNoCerebellum",
+  "MARKOV.AREA.COMBAT/Total.Area",
+  "MARKOV.THICKNESS.COMBAT/Mean.Thickness",
+  "ASEG.VOLUME.COMBAT/TotalGrayVol",
+  "ASEG.VOLUME.COMBAT/CorticalWhiteMatterVol",
+  "ASEG.VOLUME.COMBAT/SubCortGrayVol",
+  "ASEG.VOLUME.COMBAT/Total.Lateral.Ventricle")
+LARGE <- loadPhenotype(phenotype_list)
+```
+
+We want a function that will calculate the average values of a certain phenotype over a sliding window
+The sliding window should be a parameter
+First I want to show the distribution of data on a normal scale to determine the lenght of the sliding window
+
+```{r}
+MARKOV.VOLUME.INSULA <- readRDS("../../RDS/MARKOV.VOLUME.COMBAT/insula/SUBSET.rds")
+plot(MARKOV.VOLUME.INSULA$Age, MARKOV.VOLUME.INSULA$insula)
+```
+
+It looks like an age around 25 years will be the cutoff, but lets check
+
+```{r}
+sortedAge <- sort(MARKOV.VOLUME.INSULA$Age)
+sortedAge <- sortedAge[sortedAge <= 25]
+diff <- diff(sortedAge)
+bigGapIndex <- which.max(diff)
+largest_gap_ages <- c(sortedAge[bigGapIndex], sortedAge[bigGapIndex + 1])
+largest_gap_ages
+```
+
+The largest gap below 25 years is 1 year (12-13)
+Lets check what the largest gap is until 10 years old
+The largest gap under 10 years old is 0.75 years
+The largest gap under 6 is 0.25 years
+
+Okay, from this I think we structure the sliding window as follows:
+We start at the minimum value, finishing at the age of 25
+Have a sliding window of 2 - 3 months (maybe changes by age?)
+Averaging window will be 4 months in size until 6
+Averaging window will then increase to 8 months Until 10
+Averaging window will then increaes to 1 year for the rest
+
+```{r}
+getAgeRange <- function(minAge, windowAges, windowLength, increment) {
+  ## Function takes in a numeric vector for the cutoff of Ages from min
+  ## Also takes in the windowLength as a vector, determining the AVERAGING window length at each cutoff
+  ## Also takes the increment as a numeric
+  ## Returns a vector of ageSeq
+  if (length(windowAges) != length(windowLength)) {
+    print("windowAges and windowLength must be the same length")
+    return()
+  }
+  ageSeq <- list()
+  for (NUM in 1:length(windowAges)) {
+    ageStart <- ifelse(NUM == 1, minAge, windowAges[NUM - 1])
+    ageEnd <- windowAges[NUM]
+    seqLen <- seq(ageStart, ageEnd, by=increment)
+    for (ELEM in 1:length(seqLen)) {
+      seqTemp <- list()
+      seqTemp[[1]] <- seqLen[ELEM]
+      seqTemp[[2]] <- seqLen[ELEM] + windowLength[NUM]
+      ageSeq <- c(ageSeq, list(seqTemp))
+    }
+  }
+  ageSeq <- setNames(ageSeq, sapply(ageSeq, function(X) { paste(round(X[[1]], 3), round(X[[2]], 3), sep="-")}))
+  return(ageSeq)
+}
+
+## We want to return a list of lists, each list being a region in markov order
+## Each element of the list will have the calculated average of that region over a sliding window
+## Element name should be the range of the age it is calculated over
+slidingWindowAverage <- function(source, windowAges, windowLength, increment, dataType, returnType=NULL) {
+  source("../../301.functions.r")
+  markovOrder <- fromJSON("../../data_v2.0/demographics/markov_order.json")
+  SUBSET.LIST <- list()
+  for (NUM in 1:length(markovOrder)) {
+    if(dataType == "raw") {
+      LOAD <- readRDS(file.path("../../RDS", source, names(markovOrder[NUM]), "SUBSET.rds"))
+      SUBSET.LIST[[names(markovOrder)[NUM]]] <- LOAD[, c("Age", "Sex", "AgeTransformed", names(markovOrder[NUM]))]
+    } else if (dataType == "fit") {
+      if (!file.exists(file.path("../../RDS", source, names(markovOrder)[NUM], "FIT.EXTRACT.rds"))) {
+        next
+      }
+      FIT.EXTRACT <- readRDS(file.path("../../RDS", source, names(markovOrder)[NUM], "FIT.EXTRACT.rds"))
+      CURVE <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(0.452, 2.5, by=0.002), Sex = "F")),
+        expand.grid(list(AgeTransformed = seq(0.452, 2.5, by=0.002), Sex = "M"))
+        ),
+        FITParam = FIT.EXTRACT$param
+      )
+      CURVE$Age <- CURVE$AgeTransformed - 0.452
+      CURVE <- CURVE %>%
+        mutate(growthRate = c(diff(PRED.m500.pop) / diff(Age), 0))
+      SUBSET.LIST[[names(markovOrder)[NUM]]] <- CURVE %>%
+        filter(Sex == "M") %>%
+        dplyr::select(Age, Sex, AgeTransformed, PRED.m500.pop, growthRate)
+    }
+  }
+  slidingAverage <- list()
+  ## Asumming they all have the same minage
+  minAge <- min(SUBSET.LIST[[1]]$Age)
+  ageSeq <- getAgeRange(minAge, windowAges, windowLength, increment)
+  slidingAverage <- lapply(SUBSET.LIST, function(X) {
+    averageList <- list()
+    averageList <- lapply(ageSeq, function(Y) {
+      X <- X %>%
+        filter(Age >= Y[[1]] & Age <= Y[[2]]) %>%
+        summarise(meanCol = mean(.[, 5]), ## Change back to '4' for prop
+                  lengthCol = length(.[, 5])) %>%
+        as.list()
+      return(X)
+    return(averageList)
+    })
+    ## Lets also add the option to normalize the values as a proportion of its total
+    #if (returnType == "prop") { ## Un comment this when turning it back
+    #  averages <- sapply(averageList, function(X) X[[1]])
+    #  maxVal <- suppressWarnings({max(averages, na.rm=TRUE)})
+    #  averageList <- lapply(averageList, function(X) {
+    #    X[[1]] <- X[[1]] / maxVal
+    #    return(X)
+    #  })
+    #}
+    return(averageList) ## Remove when using "prop"
+  })
+  return(slidingAverage)
+}
+
+rotateList <- function(slidingAverage) {
+  newData <- list()
+  for (NUM in 1:length(slidingAverage[[1]])) {
+    newData[[NUM]] <- lapply(slidingAverage, function(X) {
+      data <- list()
+      data[[1]] <- round(X[[NUM]]$meanCol, 4)
+      data[[2]] <- X[[NUM]]$lengthCol
+      names(data) <- c("data", "samples")
+      return(data)
+    })
+  }
+  names(newData) <- names(slidingAverage[[1]])
+  return(newData)
+}
+```
+
+Now we have the functions to calculate the average based on a sliding window scale and get it into the correct format
+
+```{r}
+volumeSlidingAverage <- slidingWindowAverage(
+  source="MARKOV.VOLUME.COMBAT",
+  windowAges=c(2),
+  windowLength=c(0.1),
+  increment=0.05,
+  dataType="fit",
+  returnType="notprop")
+volumeSlidingAverageRotate <- rotateList(volumeSlidingAverage)
+```
+
+Testing a sliding window plot
+
+```{r}
+## Create a lifespan plot
+library(ggplot2)
+source("../../301.functions.r")
+Visualize.Ages <- function(LARGE, age_range, basePath) {
+  constant <- 0.452
+  PRIMARY <- LARGE[['TotalGrayVol']]
+  PRIMARY$SUBSET$LogAge <- log(PRIMARY$SUBSET$AgeTransformed)
+  minage <- min(PRIMARY$SUBSET$AgeTransformed)
+
+  #FIT.EXTRACT <- readRDS(file.path(basePath, "Figure4Data/humanFitGMV.rds"))
+
+  ## Bind fit
+  PRIMARY$CURVE <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(0.452, 35, by=0.002), Sex = "F")),
+        expand.grid(list(AgeTransformed = seq(0.452, 35, by=0.002), Sex = "M"))
+        ),
+        FITParam = PRIMARY$FIT.EXTRACT$param
+      )
+  #CURVE <- Apply.Param(
+  #      NEWData = rbind(
+  #      expand.grid(list(AgeTransformed = seq(log(270),log(365*95),length.out=2^10), sex = "Female")),
+  #      expand.grid(list(AgeTransformed = seq(log(270),log(365*95),length.out=2^10), sex = "Male"))
+  #      ),
+  #      FITParam = FIT.EXTRACT$param
+  #    )
+  #CURVE$AgeTransformed <- exp(CURVE$AgeTransformed)
+  #CURVE$Age <- CURVE$AgeTransformed - 365
+  PRIMARY$CURVE <- PRIMARY$CURVE %>%
+    mutate(LogAge = log(AgeTransformed))
+  PRIMARY$CURVE <- subset(PRIMARY$CURVE, Sex == "M")
+  ribbon <- subset(PRIMARY$CURVE, AgeTransformed >= (age_range[1] + constant) & AgeTransformed <= (age_range[2] + constant))
+  scatterplot <- ggplot() +
+    geom_line(data = PRIMARY$CURVE, aes_string(x ="LogAge", y = "PRED.m500.pop"), size = 1.5, color="gray") +
+    geom_line(data=ribbon, aes_string(x = "LogAge", y = "PRED.m500.pop"), size=5, color="red", alpha=0.5) +
+    theme_classic() +
+    scale_y_continuous(expand = expansion(mult = c(0.05, .05))) +
+    xlab("") +
+    ylab("Total Gray Vol") +
+    xlim(log(constant), log(35)) +
+    theme(legend.position = "none") +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust=1, size=12),
+      axis.text.y = element_blank(),
+      #axis.title.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.line.y = element_blank())
+
+  ## Add breaks
+  scatterplot <- scatterplot + scale_x_continuous(
+      breaks = c(log(constant), log((2 / 12) + constant), log((5 / 12) + constant), log((8 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant), log((10) + constant), log((30) + constant)),
+      labels = c("Birth", "2m", "5m", "8m", "1yr", "3yr", "6yr", "10yr", "30yr")) +
+  #scatterplot <- scatterplot + scale_x_continuous(
+  #    breaks=c(log(270), log(635), log(1365), log(2460), log(4650), log(6840), log(14870), log(22170)),
+  #    labels=c("Birth", "1yr", "3yr", "6yr", "12yr", "18yr", "40yr", "60yr")
+  #  ) +
+      geom_vline(xintercept = log(0.452), alpha = 0.65, color = "gray", linetype = "dashed") +
+      geom_vline(xintercept = log(0.452+6), alpha = 0.65, color = "gray", linetype = "dashed") +
+      geom_vline(xintercept = log(0.452+10), alpha = 0.65, color = "gray", linetype = "dashed")
+
+  return(scatterplot)
+}
+curve <- Visualize.Ages(LARGE, c(0.025, 0.075), "/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Plotting/Final")
+curve
+```
+
+Now we want to create a customized function that will accept the lists, visualize them and save them in the right directory with the correct name
+
+```{r}
+library(ggplot2)
+library(png)
+library(grid)
+
+Visualize.Surface <- function(lh_data, rh_data, species, parcellation, save_location, color_map, color_range_min, color_range_max) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan")
+  write.table(lh_data, "Plotting/temp_lh_data.csv", col.names = FALSE, row.names = FALSE)
+  write.table(rh_data, "Plotting/temp_rh_data.csv", col.names = FALSE, row.names = FALSE)
+  system(paste("python3", "Plotting/Surface.Plotting.py", parcellation, species, save_location, color_map, color_range_min, color_range_max, "Plotting/temp_lh_data.csv", "Plotting/temp_rh_data.csv", sep = " "))
+}
+
+addTitle <- function(slidingAverage, lifespanPlots, basePath, type) {
+  library(patchwork)
+  pngPath <- file.path(basePath, "Figure4Images/LifespanSurfaceImages", type)
+  paths <- sapply(names(slidingAverage), function(X) file.path(pngPath, paste0(X, "yrs.png")))
+  for (NUM in 1:length(slidingAverage)) {
+    if (!file.exists(paths[NUM])) {
+      return()
+    }
+    sample <- slidingAverage[[NUM]][[1]]$samples
+    age_range <- strsplit(names(slidingAverage)[NUM], "-")[[1]]
+    age_range <- lapply(age_range, function(x) round(as.numeric(x), 2))
+    #age_range <- paste0(age_range, collapse="-")
+    age_range <- paste0(age_range[2], "yrs")
+    img <- readPNG(paths[NUM])
+    g <- rasterGrob(img, interpolate=TRUE)
+    gg <- qplot(1:10, 1:10, geom="blank") +
+      annotation_custom(g, xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf) +
+      theme_bw() +
+      ggtitle(age_range) +
+      ggeasy::easy_center_title() +
+      theme(
+        panel.background = element_rect(fill = "white"),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank(),
+        panel.border = element_blank()
+        )
+    ggg <- gg / lifespanPlots[[NUM]]
+    ggsave(paths[NUM], ggg, width=6, height=4)
+  }
+}
+
+createGIF <- function(type, basePath, names, fps=1) {
+  library(magick)
+  pngPath <- file.path(basePath, "Figure4Images/LifespanSurfaceImages", type)
+  paths <- sapply(names, function(X) file.path(pngPath, paste0(X, "yrs.png")))
+  paths <- Filter(file.exists, paths)
+  images <- image_join(lapply(paths, image_read))
+  gif <- image_animate(images, fps = fps)
+  image_write(gif, path = file.path(pngPath, "growth.gif"))
+}
+
+createVisualization <- function(LARGE, type, slidingAverage, color_map, color_range_min, color_range_max, fps=1) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Plotting/Final")
+  basePath <- "/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Plotting/Final"
+  lifespanPlots <- list()
+  for (NUM in 1:length(slidingAverage)) {
+    vals <- c(0, unlist(sapply(slidingAverage[[NUM]], function(X) X[[1]])))
+    #vals <- c(vals[1:4], 0, vals[5:length(vals)]) # some code here!
+    name <- paste0(names(slidingAverage[NUM]), "yrs.png")
+    savePathSurface <- file.path(basePath, "Figure4Images/LifespanSurfaceImages", type, name)
+    age_range <- strsplit(names(slidingAverage)[NUM], "-")[[1]]
+    age_range <- unlist(lapply(age_range, function(x) round(as.numeric(x), 1)))
+    Visualize.Surface(vals, vals, "monkey", "markov", savePathSurface, color_map, color_range_min, color_range_max)
+    lifespan <- Visualize.Ages(LARGE, age_range, basePath)
+    lifespanPlots[[NUM]] <- lifespan
+  }
+  addTitle(slidingAverage, lifespanPlots, basePath, type)
+  createGIF(type, basePath, names(slidingAverage), fps=fps)
+}
+
+createVisualization(LARGE, "volume_growth", volumeSlidingAverageRotate, "coolwarm", -5, 5, fps=4)
+```
+
+Now we want to match the lifespan for the human and macaque by TotalGrayVolume and scale time points from humans to macaques
+
+```{r}
+## Load in the human/macaque TotalGrayVolPeak
+loadHumanMacaquePeaks <- function() {
+  crossSpeciesPeaks <- list()
+  ## Human
+  HTGV <- read.csv("../peak_data/in_human_space/aparc/human_data/gray_matter_peak.csv", header = FALSE)
+  HTA <- read.csv("../peak_data/in_human_space/aparc/human_data/surface_area_peak.csv", header = FALSE)
+  HMT <- read.csv("../peak_data/in_human_space/aparc/human_data/mean_thickness_peak.csv", header = FALSE)
+  ## Macaque
+  MTGV_df <- readRDS("../../RDS/ASEG.VOLUME.COMBAT/TotalGrayVol/peak_CI.rds")
+  MTGV_df <- MTGV_df - 0.452
+  MTGV <- (MTGV_df$Male_Peak + MTGV_df$Female_Peak) / 2 ## Just averaging the two for now
+  MTA_df <- readRDS("../../RDS/MARKOV.AREA.COMBAT/Total.Area/peak_CI.rds")
+  MTA_df <- MTA_df - 0.452
+  MTA <- (MTA_df$Male_Peak + MTA_df$Female_Peak) / 2
+  MMT_df <- readRDS("../../RDS/MARKOV.THICKNESS.COMBAT/Mean.Thickness/peak_CI.rds")
+  MMT_df <- MMT_df - 0.452
+  MMT <- (MMT_df$Male_Peak + MMT_df$Female_Peak) / 2
+
+  crossSpeciesPeaks[["Volume"]][["Human"]] <- HTGV[1, 1]
+  crossSpeciesPeaks[["Volume"]][["Macaque"]] <- MTGV
+  crossSpeciesPeaks[["Area"]][["Human"]] <- HTA[1, 1]
+  crossSpeciesPeaks[["Area"]][["Macaque"]] <- MTA
+  crossSpeciesPeaks[["Thickness"]][["Human"]] <- HMT[1, 1]
+  crossSpeciesPeaks[["Thickness"]][["Macaque"]] <- MMT
+  saveRDS(crossSpeciesPeaks, "Figure4Images/crossSpeciesPeaks.rds")
+  return(crossSpeciesPeaks)
+}
+crossSpeciesPeaks <- loadHumanMacaquePeaks()
+```
+
+```{r}
+## Now get the scaling between Human and Macaque (something off here)
+getScaling <- function(human, macaque) {
+  scaling <- human / macaque
+  return(scaling)
+}
+scaling <- getScaling(crossSpeciesPeaks[["Volume"]][["Human"]], crossSpeciesPeaks[["Volume"]][["Macaque"]])
+scaling
+```
+
+Load in the human fit and the macaque fit in order to model both fits in one plot (FINAL)
+
+```{r}
+loadHumanMacaqueCurves <- function(humanPath, macaquePath, types, minage) {
+  source("../../301.functions.r")
+  ## Load in two FITS, ApplyParam, set to proportion of max value
+  if (length(humanPath) != length(macaquePath)) {
+    print("humanPath and macaquePath must be the same length")
+    return()
+  }
+  CURVES <- list()
+  for (NUM in 1:length(humanPath)) {
+    LIST <- list()
+    humanFit <- readRDS(humanPath[NUM])
+    macaqueFit <- readRDS(macaquePath[NUM])
+    LIST$MacaqueCurve <- Apply.Param(
+      NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(minage[NUM], 35, by = 0.01), Sex = "F")),
+        expand.grid(list(AgeTransformed = seq(minage[NUM], 35, by = 0.01), Sex = "M"))
+      ),
+      FITParam = macaqueFit$param
+    )
+    LIST$MacaqueCurve$metric <- types[NUM]
+    LIST$MacaqueCurve <- LIST$MacaqueCurve %>%
+      group_by(Sex) %>%
+      mutate(PRED.m500.pop.prop = PRED.m500.pop / max(PRED.m500.pop)) %>%
+      ungroup()
+
+    LIST$HumanCurve <- Apply.Param(
+      NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(log(90),log(365*95),length.out=2^10), sex = "Female")),
+        expand.grid(list(AgeTransformed = seq(log(90),log(365*95),length.out=2^10), sex = "Male"))
+      ),
+      FITParam = humanFit$param
+    )
+    LIST$HumanCurve$metric <- types[NUM]
+    LIST$HumanCurve <- LIST$HumanCurve %>%
+      group_by(sex) %>%
+      mutate(PRED.m500.pop.prop = PRED.m500.pop / max(PRED.m500.pop)) %>%
+      ungroup()
+    ## Bind real ages back to the dataframes
+    LIST$MacaqueCurve$LogAge <- log(LIST$MacaqueCurve$AgeTransformed)
+    LIST$HumanCurve$Age <- exp(LIST$HumanCurve$AgeTransformed)
+    CURVES[[types[NUM]]]  <- LIST
+  }
+  ## Bind into a list
+  BIND <- list()
+  BIND[["Macaque"]] <- lapply(CURVES, function(X) X[["MacaqueCurve"]])
+  BIND[["Macaque"]] <- dplyr::bind_rows(BIND[["Macaque"]])
+  BIND[["Human"]] <- lapply(CURVES, function(X) X[["HumanCurve"]])
+  BIND[["Human"]] <- dplyr::bind_rows(BIND[["Human"]])
+
+  ## Add two more lists for growth peaks and peak of curves
+  BIND[["MacaquePeaks"]] <- BIND[["Macaque"]] %>%
+    filter(Sex == "M") %>%
+    group_by(metric) %>%
+    summarise(curvePeakAge = LogAge[which.max(PRED.m500.pop.prop)],
+              curvePeak = max(PRED.m500.pop.prop),
+              growthPeakAge = LogAge[which.max(diff(PRED.m500.pop.prop))],
+              growthPeakAgeNonTransformed = AgeTransformed[which.max(diff(PRED.m500.pop.prop))] - 0.452,
+              growthPeak = PRED.m500.pop.prop[which.max(diff(PRED.m500.pop.prop))],
+              curvePeakAgeNonTransformed = AgeTransformed[which.max(PRED.m500.pop.prop)] - 0.452,
+              agingPeak = PRED.m500.pop.prop[which.min(diff(PRED.m500.pop.prop))],
+              agingPeakAge = LogAge[which.min(diff(PRED.m500.pop.prop))],
+              agingPeakAgeNonTransformed = AgeTransformed[which.min(diff(PRED.m500.pop.prop))] - 0.452)
+
+  BIND[["HumanPeaks"]] <- BIND[["Human"]] %>%
+    filter(sex == "Male") %>%
+    group_by(metric) %>%
+    summarise(curvePeakAge = AgeTransformed[which.max(PRED.m500.pop.prop)],
+              curvePeak = max(PRED.m500.pop.prop),
+              growthPeakAge = AgeTransformed[which.max(diff(PRED.m500.pop.prop))],
+              growthPeakAgeNonTransformed = Age[which.max(diff(PRED.m500.pop.prop))] - 365,
+              growthPeak = PRED.m500.pop.prop[which.max(diff(PRED.m500.pop.prop))],
+              curvePeakAgeNonTransformed = Age[which.max(PRED.m500.pop.prop)] - 365,
+              agingPeak = PRED.m500.pop.prop[which.min(diff(PRED.m500.pop.prop))],
+              agingPeakAge = AgeTransformed[which.min(diff(PRED.m500.pop.prop))],
+              agingPeakAgeNonTransformed = Age[which.min(diff(PRED.m500.pop.prop))] - 365)
+
+  return(BIND)
+}
+HumanMacaqueCurves <- loadHumanMacaqueCurves(
+  humanPath=c(
+    "Figure4Data/humanFitGMV.rds",
+    "Figure4Data/humanFitWMV.rds",
+    "Figure4Data/humanFitTV.rds",
+    "Figure4Data/humanFitSA.rds",
+    "Figure4Data/humanFitCT.rds",
+    "Figure4Data/humanFitCV.rds",
+    "Figure4Data/humanFitSGMV.rds"
+  ),
+  macaquePath=c(
+    "../../RDS/ASEG.VOLUME.COMBAT/TotalGrayVol/FIT.EXTRACT.rds",
+    "../../RDS/ASEG.VOLUME.COMBAT/CorticalWhiteMatterVol/FIT.EXTRACT.rds",
+    "../../RDS/ASEG.VOLUME.COMBAT/Total.Lateral.Ventricle/FIT.EXTRACT.rds",
+    "../../RDS/MARKOV.AREA.COMBAT/Total.Area/FIT.EXTRACT.rds",
+    "../../RDS/MARKOV.THICKNESS.COMBAT/Mean.Thickness/FIT.EXTRACT.rds",
+    "../../RDS/ASEG.VOLUME.COMBAT/BrainSegVolNotVentNoCerebellum/FIT.EXTRACT.rds",
+    "../../RDS/ASEG.VOLUME.COMBAT/SubCortGrayVol/FIT.EXTRACT.rds"
+  ),
+  types=c(
+    "Gray Matter Volume",
+    "White Matter Volume",
+    "Ventricular Volume",
+    "Surface Area",
+    "Cortical Thickness",
+    "Cerebrum Volume",
+    "Subcortical Gray Volume"
+    ),
+  minage=c(
+    0.1705,
+    0.1705,
+    0.1705,
+    0.1705,
+    0.1705,
+    0.1705,
+    0.1705
+  )
+)
+
+saveRDS(HumanMacaqueCurves, "Figure4Data/crossSpeciesCurveFits.rds")
+```
+
+```{r}
+plot(TGVHumanMacaque$HumanCurve$AgeTransformed, TGVHumanMacaque$HumanCurve$PRED.m500.pop)
+```
+
+Function to plot both groups of curves
+I also need code that will:
+
+- Annotate the peak of the curve
+- Annotate the GROWTH peak of the curve
+
+```{r}
+plotHumanMacaqueCurves <- function(LIST, ylim) {
+  library(ggplot2)
+  library(patchwork)
+  library(viridis)
+  constant <- 0.452
+
+  ## Filter by Male for now
+  LIST$Macaque <- LIST$Macaque %>%
+    filter(Sex == "M")
+  LIST$Human <- LIST$Human %>%
+    filter(sex == "Male")
+
+  ## Make the human version dotted to denote no collected data
+  VENT.CURVE <- LIST$Human %>%
+    filter(metric == "Ventricular Volume")
+  LIST$Human <- LIST$Human %>%
+    filter(metric != "Ventricular Volume")
+
+  ## Offset the cerebrum volume peak for visibility
+  LIST$MacaquePeaks[LIST$MacaquePeaks$metric == "Cerebrum Volume", "curvePeakAge"] <- LIST$MacaquePeaks[LIST$MacaquePeaks$metric == "Cerebrum Volume", "curvePeakAge"] + 0.02
+  LIST$MacaquePeaks[LIST$MacaquePeaks$metric == "Cerebrum Volume", "curvePeak"] <- LIST$MacaquePeaks[LIST$MacaquePeaks$metric == "Cerebrum Volume", "curvePeak"] + 0.03
+  LIST$MacaquePeaks[LIST$MacaquePeaks$metric == "White Matter Volume", "curvePeakAge"] <- LIST$MacaquePeaks[LIST$MacaquePeaks$metric == "White Matter Volume", "curvePeakAge"] - 0.04
+  LIST$MacaquePeaks[LIST$MacaquePeaks$metric == "White Matter Volume", "curvePeak"] <- LIST$MacaquePeaks[LIST$MacaquePeaks$metric == "White Matter Volume", "curvePeak"] + 0.03
+
+  macaqueScatter <- ggplot() +
+    geom_line(data = LIST$Macaque,
+              aes(x = LogAge, y = PRED.m500.pop.prop, color = metric),
+              size = 1.5) +
+    geom_point(data=LIST$MacaquePeaks, aes(x=curvePeakAge, y=curvePeak, color=metric), size=5) +
+    geom_point(data=LIST$MacaquePeaks, aes(x=growthPeakAge, y=growthPeak, color=metric), size=5, shape=17) +
+    #geom_point(data=LIST$MacaquePeaks, aes(x=agingPeakAge, y=agingPeak, color=metric), size=5, shape=15) +
+    theme_classic() +
+    scale_y_continuous(expand = expansion(mult = c(0.05, .05))) +
+    ylim(ylim) +
+    xlab("") +
+    ylab("Proportion of maximum value") +
+    theme(
+      axis.text.x = element_text(size=12),
+      axis.text.y = element_text(size=12),
+      legend.title = element_blank(),
+      legend.text = element_text(size=12),
+      axis.title.y = element_text(size=14)
+    ) +
+    scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr")) +
+    scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+    geom_vline(xintercept=log((constant)), alpha=0.65, color="black") +
+    geom_vline(xintercept = log((4/12) + constant), alpha = 0.7, color = "gray") +
+    geom_vline(xintercept = log((1) + constant), alpha = 0.7, color = "gray") +
+    geom_vline(xintercept = log((2) + constant), alpha = 0.7, color = "gray") +
+    geom_vline(xintercept = log((3) + constant), alpha = 0.7, color = "gray") +
+    geom_vline(xintercept = log((6) + constant), alpha = 0.7, color = "gray") +
+    geom_vline(xintercept = log((15) + constant), alpha = 0.7, color = "gray") +
+    geom_vline(xintercept = log((25) + constant), alpha = 0.7, color = "gray") +
+    annotate("text", x=log(2/12 + constant)-0.01, y=1.1, label="Infancy", size=4) +
+    annotate("text", x=log(7/12 + constant)+0.03, y=1.1, label="Toddler", size=4) +
+    annotate("text", x=log(1.5 + constant)-0.02, y=1.1, label="Childhood", size=4) +
+    #annotate("text", x=log(2.25 + constant)-0.03, y=1.1, label="Late Childhood", size=3) +
+    annotate("text", x=log(4.5 + constant)-0.04, y=1.1, label="Adolescence", size=4) +
+    annotate("text", x=log(10.5 + constant)-0.09, y=1.1, label="Mid-life", size=4) +
+    annotate("text", x=log(20 + constant)-0.02, y=1.1, label="Elder", size=4) +
+    scale_color_manual(values=c(
+      "Gray Matter Volume" = "#DC000099",
+      "White Matter Volume" = "#00A08799",
+      "Ventricular Volume" = "#3C548899",
+      "Surface Area" = "#B09C5899",
+      "Cerebrum Volume" = "#F39B7F99",
+      "Cortical Thickness" = "#4DBBD599",
+      "Subcortical Gray Volume" = "#7E6148FF"))
+
+  humanScatter <- ggplot() +
+    geom_line(data = LIST$Human, aes(x=AgeTransformed, y=PRED.m500.pop.prop, color=metric), size = 1.5) +
+    geom_line(data = subset(VENT.CURVE, AgeTransformed < log(270)),
+              aes_string(x = "AgeTransformed", y = "PRED.m500.pop.prop"),
+              color = "#3C548899",
+              size = 1.5,
+              linetype = "dashed",
+              ) +
+    geom_line(data = subset(VENT.CURVE, AgeTransformed >= log(270)),
+              aes_string(x = "AgeTransformed", y = "PRED.m500.pop.prop"),
+              color = "#3C548899",
+              size = 1.5) +
+    geom_point(data = LIST$HumanPeaks, aes(x=curvePeakAge, y=curvePeak, color=metric), size=5) +
+    geom_point(data=LIST$HumanPeaks, aes(x=growthPeakAge, y=growthPeak, color=metric), size=5, shape=17) +
+    #geom_point(data=LIST$HumanPeaks, aes(x=agingPeakAge, y=agingPeak, color=metric), size=5, shape=15) +
+    theme_classic() +
+    ylim(ylim) +
+    xlab("") +
+    ylab("Proportion of maximum value") +
+    scale_x_continuous(
+      breaks=c(log(270), log(635), log(1365), log(2460), log(4650), log(6840), log(14870), log(22170)),
+      labels=c("Birth", "1yr", "3yr", "6yr", "12yr", "18yr", "40yr", "60yr")
+    ) +
+    scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+    geom_vline(xintercept=log(270), alpha=0.65, color="black") +
+    geom_vline(xintercept=log(635), alpha=0.7, color="gray") +
+    geom_vline(xintercept=log(1365), alpha=0.7, color="gray") +
+    geom_vline(xintercept=log(2460), alpha=0.7, color="gray") +
+    geom_vline(xintercept=log(4650), alpha=0.7, color="gray") +
+    geom_vline(xintercept=log(6840), alpha=0.7, color="gray") +
+    geom_vline(xintercept=log(14870), alpha=0.7, color="gray") +
+    geom_vline(xintercept=log(22170), alpha=0.7, color="gray") +
+    annotate("text", x=log(452.5)-0.06, y=1.1, label="Infancy", size=4) +
+    annotate("text", x=log(1000)-0.05, y=1.1, label="Toddler", size=4) +
+    annotate("text", x=log(1912.5)-0.02, y=1.1, label="Childhood", size=4) +
+    annotate("text", x=log(3555)-0.04, y=1.1, label="Late Childhood", size=4) +
+    annotate("text", x=log(5745)-0.01, y=1.1, label="Adolescence", size=3.8) +
+    annotate("text", x=log(10855)-0.08, y=1.1, label="Mid-life", size=4) +
+    annotate("text", x=log(18520)-0.02, y=1.1, label="Elder", size=4) +
+    scale_color_manual(values=c(
+      "Gray Matter Volume" = "#DC000099",
+      "White Matter Volume" = "#00A08799",
+      "Ventricular Volume" = "#3C548899",
+      "Surface Area" = "#B09C5899",
+      "Cerebrum Volume" = "#F39B7F99",
+      "Cortical Thickness" = "#4DBBD599",
+      "Subcortical Gray Volume" = "#7E6148FF")) +
+    theme(
+      axis.text.x = element_text(size=12),
+      axis.text.y = element_text(size=12),
+      legend.position = "none",
+      legend.title = element_blank(),
+      axis.title.y = element_text(size=14)
+    )
+
+  dev_mile <- readxl::read_xlsx("Figure4Data/Developmental_Milestones.xlsx")
+  dev_mile$Milestone <- factor(dev_mile$Milestone, levels = unique(dev_mile$Milestone))
+  offset <- 0.2
+  dev_mile$ymin <- as.numeric(dev_mile$Milestone) - ifelse(dev_mile$Sex == "Male", offset, 0)
+  dev_mile$ymax <- as.numeric(dev_mile$Milestone) + ifelse(dev_mile$Sex == "Male", 0, offset)
+  dev_mile$dev_start_transform <- dev_mile$dev_start + 0.452
+  dev_mile$dev_end_transform <- dev_mile$dev_end + 0.452
+  dev_mile$log_dev_start <- log(dev_mile$dev_start_transform)
+  dev_mile$log_dev_end <- log(dev_mile$dev_end_transform)
+  dev_mile$Same <- ave(dev_mile$dev_start, dev_mile$Milestone, FUN=function(x) length(unique(x)) == 1)
+
+  rect_data <- subset(dev_mile, !Milestone %in% c("Synaptic Density (min to max)", "Sexual Maturation", "Brain RMR", "Gestation"))
+  segment_data <- subset(dev_mile, Milestone %in% c("Synaptic Density (min to max)", "Sexual Maturation", "Brain RMR", "Gestation"))
+  dev_plot <- ggplot() +
+    geom_segment(data = segment_data, aes(x = log_dev_start, xend = log_dev_end, y = ymax - 0.1, yend = ymax - 0.1, color = ifelse(Same, "Both", Sex)), size = 1) +
+    geom_point(data = segment_data, aes(x = log_dev_start, y = ymax - 0.1, color = ifelse(Same, "Both", Sex)), size = 1.5) +
+    geom_point(data = segment_data, aes(x = log_dev_end, y = ymax - 0.1, color = ifelse(Same, "Both", Sex)), size = 1.5) +
+    geom_rect(data = rect_data, aes(xmin = log_dev_start, xmax = log_dev_end, ymin = ymin, ymax = ymax, fill = ifelse(Same, "Both", Sex)), alpha = 0.5, color = "black") +
+    scale_y_continuous(name = "", breaks = seq_along(levels(dev_mile$Milestone)), labels = levels(dev_mile$Milestone)) +
+    theme_classic() +
+    scale_fill_manual(name = "Sex", values = c("Male" = "#247BA0", "Female" = "#E3170A", "Both" = "gray")) +
+    scale_color_manual(name = "Sex", values = c("Male" = "#247BA0", "Female" = "#E3170A", "Both" = "gray")) +
+    labs(title = "", x = "", y = "") +
+    geom_vline(xintercept=log((constant)), alpha=0.65, color="black") +
+    geom_vline(xintercept = log((4/12) + constant), alpha = 0.7, color = "gray") +
+    geom_vline(xintercept = log((1) + constant), alpha = 0.7, color = "gray") +
+    geom_vline(xintercept = log((2) + constant), alpha = 0.7, color = "gray") +
+    geom_vline(xintercept = log((3) + constant), alpha = 0.7, color = "gray") +
+    geom_vline(xintercept = log((6) + constant), alpha = 0.7, color = "gray") +
+    geom_vline(xintercept = log((15) + constant), alpha = 0.7, color = "gray") +
+    geom_vline(xintercept = log((25) + constant), alpha = 0.7, color = "gray") +
+    geom_hline(yintercept = as.numeric(dev_mile$Milestone), linetype = "dashed", color = "gray") +
+    scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr")) +
+    theme(
+      axis.text.x = element_text(size = 12),
+      axis.text.y = element_text(size = 12),
+      axis.title.x = element_text(size = 14),
+      axis.title.y = element_text(size = 14),
+      strip.text.y = element_text(size = 14)
+    )
+
+
+  combined_plot <- humanScatter / macaqueScatter +
+    theme(legend.position = "bottom",
+          legend.direction = "horizontal") +
+    guides(colour = guide_legend(nrow = 1))# Suppress legend from human plot
+
+  ## Manually adding legend from macaque plot
+  combined_plot <- humanScatter / macaqueScatter +
+    theme(legend.position = "bottom",
+          legend.direction = "horizontal") +
+    guides(color = guide_legend(title = "", nrow = 1)) +
+    plot_layout(
+      axis_titles = "collect"
+    )
+
+  combined_plot <- combined_plot + dev_plot
+
+  return(combined_plot)
+}
+plot <- plotHumanMacaqueCurves(HumanMacaqueCurves, c(0, 1.1))
+ggsave("Figure4.pdf", plot=plot, width=18, height=10)
+ggsave("Figure4.png", plot=plot, width=18, height=10)
+```
+
+Section for getting point curve plots at the specific age for both human and macaque
+
+```{r}
+rotatePointCurve <- function(slidingAverage) {
+  newData <- list()
+  for (NUM in 1:length(slidingAverage[[1]])) {
+    newData[[NUM]] <- lapply(slidingAverage, function(X) {
+      data <- list()
+      data[[1]] <- round(X[[NUM]][[1]], 4)
+      names(data) <- c("data")
+      return(data)
+    })
+  }
+  names(newData) <- names(slidingAverage[[1]])
+  return(newData)
+}
+
+getAgeSeq <- function(minAge, windowAges) {
+  ## Function takes in a numeric vector for the cutoff of Ages from min
+  ## Also takes in the windowLength as a vector, determining the AVERAGING window length at each cutoff
+  ## Also takes the increment as a numeric
+  ## Returns a vector of ageSeq
+  ageSeq <- list()
+  for (NUM in 1:length(windowAges)) {
+    ageSeq[[NUM]] <- list()
+    ageSeq[[NUM]][[1]] <- windowAges[NUM]
+  }
+  ageSeq <- setNames(ageSeq, sapply(ageSeq, function(X) { round(X[[1]], 3)}))
+  return(ageSeq)
+}
+
+## We want to return a list of lists, each list being a region in markov order
+## Each element of the list will have the calculated average of that region over a sliding window
+## Element name should be the range of the age it is calculated over
+getPointCurve <- function(source, species, windowAges, dataType, returnType=NULL) {
+  source("../../301.functions.r")
+  if (species == "monkey") {
+    markovOrder <- fromJSON("../../data_v2.0/demographics/markov_order.json")
+    SUBSET.LIST <- list()
+    for (NUM in 1:length(markovOrder)) {
+      if(dataType == "raw") {
+        LOAD <- readRDS(file.path("../../RDS", source, names(markovOrder[NUM]), "SUBSET.rds"))
+        SUBSET.LIST[[names(markovOrder)[NUM]]] <- LOAD[, c("Age", "Sex", "AgeTransformed", names(markovOrder[NUM]))]
+      } else if (dataType == "fit") {
+        FIT.EXTRACT <- readRDS(file.path("../../RDS", source, names(markovOrder[NUM]), "FIT.EXTRACT.rds"))
+        CURVE <- Apply.Param(
+          NEWData = rbind(
+          expand.grid(list(AgeTransformed = seq(0.452, 35, by = 0.01), Sex = "F")),
+          expand.grid(list(AgeTransformed = seq(0.452, 35, by = 0.01), Sex = "M"))
+          ),
+          FITParam = FIT.EXTRACT$param
+        )
+        CURVE$Age <- CURVE$AgeTransformed - 0.452
+        ## Average between males and females for now
+        SUBSET.LIST[[names(markovOrder)[NUM]]] <- CURVE %>%
+          group_by(Sex) %>%
+          mutate(PRED.m500.pop.prop = PRED.m500.pop / max(PRED.m500.pop)) %>%
+          mutate(growthRate = c(diff(PRED.m500.pop) / diff(Age), NA)) %>%
+          ungroup() %>%
+          group_by(Age) %>%
+          mutate(PRED.m500.pop.prop = mean(PRED.m500.pop.prop, na.rm=TRUE))
+        #SUBSET.LIST[[names(markovOrder)[NUM]]] <- CURVE %>%
+        #  filter(Sex == "M") %>%
+        #  mutate(PRED.m500.pop.prop = PRED.m500.pop / max(PRED.m500.pop)) %>%
+        #  mutate(growthRate = c(diff(PRED.m500.pop) / diff(Age), NA)) %>%
+        #  select("Age", "Sex", "AgeTransformed", "PRED.m500.pop", "PRED.m500.pop.prop", "growthRate")
+      }
+    }
+  } else if (species == "human") {
+    aparcOrder <- fromJSON("../../data_v2.0/demographics/aparc_order.json")
+    SUBSET.LIST <- list()
+    for (NUM in 1:length(aparcOrder)) {
+      if (!file.exists(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))) {
+        next
+      }
+      FIT.EXTRACT <- readRDS(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))
+      CURVE <- Apply.Param(
+        NEWData = rbind(
+          expand.grid(list(AgeTransformed = seq(log(270),log(365*95),length.out=2^10), sex = "Female")),
+          expand.grid(list(AgeTransformed = seq(log(270),log(365*95),length.out=2^10), sex = "Male"))
+        ),
+        FITParam = FIT.EXTRACT$param
+      )
+      CURVE$Age <- (exp(CURVE$AgeTransformed) - 270) / 365
+      SUBSET.LIST[[names(aparcOrder)[NUM]]] <- CURVE %>%
+        filter(sex == "Male") %>%
+        mutate(PRED.m500.pop.prop = PRED.m500.pop / max(PRED.m500.pop)) %>%
+        mutate(growthRate = c(diff(PRED.m500.pop) / diff(Age), NA)) %>%
+        select("Age", "sex", "AgeTransformed", "PRED.m500.pop", "PRED.m500.pop.prop", "growthRate")
+    }
+  }
+  slidingAverage <- list()
+  ## Asumming they all have the same minage
+  minAge <- min(SUBSET.LIST[[1]]$Age)
+  ageSeq <- getAgeSeq(minAge, windowAges)
+  slidingAverage <- lapply(SUBSET.LIST, function(X) {
+    averageList <- list()
+    averageList <- lapply(ageSeq, function(Y) {
+      suppressWarnings({X <- X %>%
+        slice(which.min(abs(Age - as.numeric(Y)))) %>%
+        select(ifelse(returnType=="prop", 5, 4)) ## CHANGE BASED ON WHAT WE WANT TO RETURN... 5 IS PROPORTIONAL, 6 IS GROWTH RATE
+      return(X)})
+    return(averageList)
+    })
+  })
+  return(slidingAverage)
+}
+
+averageValues <- getPointCurve(
+  "MARKOV.VOLUME.COMBAT",
+  "monkey",
+  c(4/12, 1, 2, 3, 6, 15, 25),
+  dataType="fit",
+  returnType="prop"
+  )
+averageValues <- rotatePointCurve(averageValues)
+```
+
+```{r}
+createVisualization <- function(LARGE, type, slidingAverage, color_map, color_range_min, color_range_max, species, parcellation) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Plotting/Final")
+  basePath <- "/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Plotting/Final"
+  for (NUM in 1:length(slidingAverage)) {
+    vals <- c(0, unlist(sapply(slidingAverage[[NUM]], function(X) X[[1]])))
+    if (parcellation == "aparc") {
+      vals <- c(vals[1:4], 0, vals[5:length(vals)])
+    } else if (parcellation == "markov") {
+      vals <- c(0, unlist(sapply(slidingAverage[[NUM]], function(X) X[[1]])))
+    }
+    name <- paste0(names(slidingAverage[NUM]), "yrs.png")
+    savePathSurface <- file.path(basePath, "Figure4Images/LifespanSurfaceImages", type, name)
+    Visualize.Surface(vals, vals, species, parcellation, savePathSurface, color_map, color_range_min, color_range_max)
+  }
+  View(vals)
+}
+
+createVisualization(LARGE, "volume_points", averageValues, "Reds", 0.7, 1, "monkey", "markov")
+```
+
+```{r}
+## Try splitting the data by rect and line
+dev_mile <- readxl::read_xlsx("Figure4Data/Developmental_Milestones.xlsx")
+dev_mile$Milestone <- factor(dev_mile$Milestone, levels = unique(dev_mile$Milestone))
+offset <- 0.2
+dev_mile$ymin <- as.numeric(dev_mile$Milestone) - ifelse(dev_mile$Sex == "Male", offset, 0)
+dev_mile$ymax <- as.numeric(dev_mile$Milestone) + ifelse(dev_mile$Sex == "Male", 0, offset)
+dev_mile$dev_start_transform <- dev_mile$dev_start + 0.452
+dev_mile$dev_end_transform <- dev_mile$dev_end + 0.452
+dev_mile$log_dev_start <- log(dev_mile$dev_start_transform)
+dev_mile$log_dev_end <- log(dev_mile$dev_end_transform)
+
+rect_data <- subset(dev_mile, !Milestone %in% c("Synaptic Density (min to max)", "Sexual Maturation", "Brain RMR", "Gestation"))
+segment_data <- subset(dev_mile, Milestone %in% c("Synaptic Density (min to max)", "Sexual Maturation", "Brain RMR", "Gestation"))
+dev_plot <- ggplot() +
+  geom_segment(data = segment_data, aes(x = log_dev_start, xend = log_dev_end, y = ymax - 0.1, yend = ymax - 0.1, color = Sex), size = 1) +
+  geom_point(data = segment_data, aes(x = log_dev_start, y = ymax - 0.1, color = Sex), size = 1.5) +
+  geom_point(data = segment_data, aes(x = log_dev_end, y = ymax - 0.1, color = Sex), size = 1.5) +
+  geom_rect(data = rect_data, aes(xmin = log_dev_start, xmax = log_dev_end, ymin = ymin, ymax = ymax, fill = Sex), alpha = 0.5, color = "black") +
+  scale_y_continuous(name = "Milestone", breaks = seq_along(levels(dev_mile$Milestone)), labels = levels(dev_mile$Milestone)) +
+  theme_classic() +
+  scale_fill_manual(values = c("Male" = "#247BA0", "Female" = "#E3170A")) +
+  labs(title = "", x = "", y = "") +
+  geom_vline(xintercept=log((constant)), alpha=0.65, color="black") +
+  geom_vline(xintercept = log((4/12) + constant), alpha = 0.7, color = "gray") +
+  geom_vline(xintercept = log((1) + constant), alpha = 0.7, color = "gray") +
+  geom_vline(xintercept = log((2) + constant), alpha = 0.7, color = "gray") +
+  geom_vline(xintercept = log((3) + constant), alpha = 0.7, color = "gray") +
+  geom_vline(xintercept = log((6) + constant), alpha = 0.7, color = "gray") +
+  geom_vline(xintercept = log((15) + constant), alpha = 0.7, color = "gray") +
+  geom_vline(xintercept = log((25) + constant), alpha = 0.7, color = "gray") +
+  geom_hline(yintercept = as.numeric(dev_mile$Milestone), linetype = "dashed", color = "gray") +
+  scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr")) +
+  theme(
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    strip.text.y = element_text(size = 14)
+  )
+
+dev_plot
+ggsave("Figure4_dev_mile.pdf", plot=dev_plot, width=14, height=4)
+```

@@ -1,0 +1,639 @@
+```{r}
+## Load in and fit cross species trajectories
+library(jsonlite)
+library(dplyr)
+loadTrajectoriesMonkey <- function() {
+  source("../../301.functions.r")
+  phenotypes <- c("MARKOV.VOLUME.COMBAT", "MARKOV.AREA.COMBAT", "MARKOV.THICKNESS.COMBAT")
+  phenotype_names <- c("Volume", "Area", "Thickness")
+  markovOrder <- fromJSON("../../Data/ParcellationMappings/markov_order.json")
+  LARGE <- list()
+  for (IDX in 1:length(phenotypes)) {
+    ## For each measure
+    FIT.LIST <- list()
+    for (NUM in 1:length(markovOrder)) {
+      FIT.EXTRACT <- readRDS(file.path("../../RDS", phenotypes[IDX], names(markovOrder[NUM]), "FIT.EXTRACT.rds"))
+      FIT.LIST[[names(markovOrder)[NUM]]] <- Apply.Param(
+      NEWData = rbind(
+          expand.grid(list(AgeTransformed = seq(0.452, 35, length.out = 2^11), Sex = "F")),
+          expand.grid(list(AgeTransformed = seq(0.452, 35, length.out = 2^11), Sex = "M"))
+        ),
+      FITParam = FIT.EXTRACT$param
+      )
+      ## Add proportional scaling
+      FIT.LIST[[names(markovOrder)[NUM]]] <- FIT.LIST[[names(markovOrder)[NUM]]] %>%
+        group_by(Sex) %>%
+        mutate(LogAge = log(AgeTransformed)) %>%
+        mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop)) %>%
+        mutate(metric = names(markovOrder)[NUM]) %>%
+        ungroup()
+    }
+    ## Now bind all the fits into one dataframe
+    LARGE[[phenotype_names[IDX]]] <- Reduce(bind_rows, FIT.LIST)
+  }
+  return(LARGE)
+}
+
+loadTrajectoriesHuman <- function() {
+  aparcOrder <- fromJSON("../../Data/ParcellationMappings/aparc_order.json")
+  phenotypes <- c("Volume", "Area", "Thickness")
+  LARGE <- list()
+  for (IDX in 1:length(phenotypes)) {
+    FIT.LIST <- list()
+    for (NUM in 1:length(aparcOrder)) {
+      if (phenotypes[IDX] == "Volume") {
+        if (!file.exists(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))) {
+          next
+        }
+        FIT.EXTRACT <- readRDS(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))
+      } else if (phenotypes[IDX] == "Area") {
+        if (!file.exists(file.path("Figure4Data", paste0("FIT_SA_", names(aparcOrder)[NUM], ".rds")))) {
+          next
+        }
+        FIT.EXTRACT <- readRDS(file.path("Figure4Data", paste0("FIT_SA_", names(aparcOrder)[NUM], ".rds")))
+      } else if (phenotypes[IDX] == "Thickness") {
+        if (!file.exists(file.path("Figure4Data", paste0("FIT_CT_", names(aparcOrder)[NUM], ".rds")))) {
+          next
+        }
+        FIT.EXTRACT <- readRDS(file.path("Figure4Data", paste0("FIT_CT_", names(aparcOrder)[NUM], ".rds")))
+      }
+      FIT.LIST[[names(aparcOrder)[NUM]]] <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(log(365),log(365*95),length.out=2^11), sex = "Female")),
+        expand.grid(list(AgeTransformed = seq(log(365),log(365*95),length.out=2^11), sex = "Male"))
+        ),
+        FITParam = FIT.EXTRACT$param
+      )
+      FIT.LIST[[names(aparcOrder)[NUM]]] <- FIT.LIST[[names(aparcOrder)[NUM]]] %>%
+        group_by(sex) %>%
+        mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop)) %>%
+        mutate(AgeTransformed = exp(AgeTransformed)) %>%
+        mutate(Age = (AgeTransformed - 270) / 365) %>%
+        mutate(metric = names(aparcOrder)[NUM]) %>%
+        mutate(LogAge = AgeTransformed)
+    }
+    LARGE[[phenotypes[IDX]]] <- FIT.LIST#Reduce(bind_rows, FIT.LIST)
+  }
+  return(LARGE)
+}
+
+LARGE <- loadTrajectoriesMonkey()
+LARGE.HUMAN <- loadTrajectoriesHuman()
+```
+
+```{r}
+## New dataframe to match the bezgin network names to the markov names 
+markovOrder <- fromJSON("../../data_v2.0/demographics/markov_order.json")
+BezginNames <- c("Default1", "Somatomotor", "Auditory", "Limbic", "DorsalAtt", "Visual", "Insular-Opecular")
+L_mapping <- read.csv("Figure3Data/MacaquePeaks/func.gifti.bezgin/F.Area.mapping.L.csv", header=FALSE, col.names="BezginLabels")
+R_mapping <- read.csv("Figure3Data/MacaquePeaks/func.gifti.bezgin/F.Area.mapping.R.csv", header=FALSE, col.names="BezginLabels")
+BezginMapping <- L_mapping %>%
+    mutate(Names = BezginNames[BezginLabels])
+BezginMapping$markovOrder <- seq(0, 91)
+BezginMapping$metric <- c("unknown", names(markovOrder))
+LARGE <- lapply(LARGE, function(X) {
+  X <- merge(X, BezginMapping, by = "metric")
+  return(X)
+})
+BezginMapping <- BezginMapping[-1, ]
+BezginMapping <- BezginMapping %>% arrange(BezginLabels)
+```
+
+```{r}
+## Dataframe to match the mesulam network names to the human names
+aparcLabels <- fromJSON("../../data_v2.0/demographics/aparc_order.json")
+MesulamNames <- c("Paralimbic", "High-order Association", "Modality-specific Association", "Idiotypic (primary)")
+MesulamMapping <- read.csv("Figure3Data/MacaquePeaksInHuman/aparc/aparc2Mesulam/M.Volume.mapping.L.csv", header=FALSE, col.names="MesulamLabels")
+MesulamMapping <- MesulamMapping %>%
+  mutate(Names = MesulamNames[MesulamLabels])
+MesulamMapping$aparcOrder <- seq(1, 36)
+MesulamMapping$metric <- c("unknown", names(aparcLabels))
+LARGE.HUMAN <- lapply(LARGE.HUMAN, function(X) {
+  X <- merge(X, MesulamMapping, by = "metric")
+  return(X)
+})
+MesulamMapping <- MesulamMapping[-1, ]
+MesulamMapping <- MesulamMapping %>% arrange(MesulamLabels)
+```
+
+
+```{r}
+library(reshape2)
+
+heatmapPlot <- function(data, type, metric, mapping, mapping2) {
+  if (type == "Covariance") {
+    lims <- c(-0.01, 0.01)
+  } else if (type == "Correlation") {
+    lims <- c(-1, 1)
+  }
+  data <- merge(data, mapping[, c("Var1", "Var1Mapping")])
+  data <- merge(data, mapping2[, c("Var2", "Var2Mapping")])
+  plot <- ggplot(data, aes(x=Var1, y=Var2, fill=value)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient2(low = "#2166ac", high = "#b2182b", mid = "white", midpoint = 0,
+                       #limits = lims,
+                       name = type) +
+    labs(x = "", y = "") +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(
+        angle = 90, 
+        hjust = 1,
+        size = 6
+        ),
+      axis.text.y = element_text(
+        size = 6
+        )
+      ) +
+    ggtitle(paste(metric, type)) +
+    ggeasy::easy_center_title() +
+    facet_grid(Var2Mapping~Var1Mapping, scale = "free", space="free") +
+    theme(strip.text.y.right = element_text(angle = 0, hjust=0),
+          strip.text.x.top = element_text(angle = 90, hjust=0))
+  return(plot)
+}
+
+barPlotStats <- function(data, type, metric, mapping, mapping2, stats) {
+  stats$Var1Mapping <- factor(stats$Var1Mapping, levels = stats$Var1Mapping[order(stats$group_average)])
+  plot <- ggplot(data = stats, aes(x = Var1Mapping, y = group_average, fill=Var1Mapping)) +
+    geom_col() +
+    geom_errorbar(aes(ymin = group_average - SEM, ymax = group_average + SEM),
+                  width = 0.2) +
+    theme_minimal() +
+    scale_fill_manual(values=c(
+      "Default1" = "#CB816F",
+      "Somatomotor" = "#8BB0D7",
+      "Auditory" = "#FCFFAB",
+      "Limbic" = "#B7E058",
+      "DorsalAtt" = "#EAB557",
+      "Visual" = "#A28DFF",
+      "InsularOpecular" = "#99D3C7")) +
+    xlab("") +
+    ylab("Group Average") +
+    theme(
+      axis.text.x = element_text(angle=45, hjust=1),
+      legend.title = element_blank()
+    )
+
+  return(plot)
+}
+
+ANOVAtest <- function(cov_matrix, mapping1, mapping2) {
+  var1_mapping <- mapping1 %>%
+    mutate(Var1 = metric) %>%
+    mutate(Var1Mapping = Names)
+  var2_mapping <- mapping2 %>%
+    mutate(Var2 = metric) %>%
+    mutate(Var2Mapping = Names)
+  cov_matrix <- merge(cov_matrix, var1_mapping[, c("Var1", "Var1Mapping")])
+  cov_matrix <- merge(cov_matrix, var2_mapping[, c("Var2", "Var2Mapping")])
+  cov_matrix$Var1Mapping <- gsub("-", "", cov_matrix$Var1Mapping)
+  cov_matrix$Var2Mapping <- gsub("-", "", cov_matrix$Var2Mapping)
+  group_avg <- cov_matrix %>%
+    group_by(Var1Mapping) %>%
+    summarize(group_average = mean(value),
+            SEM = sd(value) / sqrt(n()))
+
+  model <- aov(value ~ Var1Mapping, data = cov_matrix)
+  print(summary(model))
+  tukey <- TukeyHSD(model)
+  print(tukey)
+  return(group_avg)
+}
+
+## Get covariance between regions (inside metric types)
+covarianceBetweenRegion <- function(LARGE, type, mapping1, mapping2) {
+  Mdata <- LARGE[[type]] %>%
+    filter(Sex == "M") %>%
+    select(LogAge, metric, PRED.mean.pop.prop)
+  Mdata <- pivot_wider(Mdata, names_from = metric, values_from = PRED.mean.pop.prop)
+  Mdata <- Mdata %>%
+    select(-LogAge)
+  ## Convert to wide 
+  cov_matrix <- cov(Mdata)
+  cor_matrix <- cor(Mdata)
+  cov_df <- melt(cov_matrix)
+  cor_df <- melt(cor_matrix)
+  
+  mapping1 <- mapping1 %>%
+    mutate(Var1 = metric) %>%
+    mutate(Var1Mapping = factor(Names, levels=c("Default1", "Somatomotor", "Auditory", "Limbic", "DorsalAtt", "Visual", "Insular-Opecular")))
+  mapping2 <- mapping2 %>%
+    mutate(Var2 = metric) %>%
+    mutate(Var2Mapping = factor(Names, levels=c("Insular-Opecular", "Visual", "DorsalAtt", "Limbic", "Auditory", "Somatomotor", "Default1")))
+  cov_df_stats <- ANOVAtest(cov_df, mapping1, mapping2)
+  cor_df_stats <- ANOVAtest(cor_df, mapping1, mapping2)
+  VolCov <- heatmapPlot(cov_df, "Covariance", type, mapping1, mapping2)
+  VolCor <- heatmapPlot(cor_df, "Correlation", type, mapping1, mapping2)
+  anovaCor <- barPlotStats(cor_df, "Correlation", type, mapping1, mapping2, cor_df_stats)
+  ggsave(plot=VolCov, file.path("SupplementaryCovariance", paste0("M", type, "Covariance.png")), width=10, height=9, dpi=300)
+  ggsave(plot=VolCor, file.path("SupplementaryCovariance", paste0("M", type, "Correlation.png")), width=10, height=9, dpi=300)
+  ggsave(plot=anovaCor, file.path("SupplementaryCovariance", paste0("M", type, "CorrelationANOVA.png")), width=6, height=4, dpi=300)
+}
+
+## Get covariance between regions, between metric types
+covarianceBetweenMetrics <- function(LARGE, type1, type2, mapping1, mapping2) {
+  Mdata1 <- LARGE[[type1]] %>%
+    filter(Sex == "M") %>%
+    select(LogAge, metric, PRED.mean.pop.prop)
+  Mdata2 <- LARGE[[type2]] %>%
+    filter(Sex == "M") %>%
+    select(LogAge, metric, PRED.mean.pop.prop)
+  Mdata1 <- pivot_wider(Mdata1, names_from = metric, values_from = PRED.mean.pop.prop)
+  Mdata2 <- pivot_wider(Mdata2, names_from = metric, values_from = PRED.mean.pop.prop)
+  Mdata1 <- Mdata1 %>%
+    select(-LogAge)
+  Mdata2 <- Mdata2 %>%
+    select(-LogAge)
+  cov_matrix <- cov(Mdata1, Mdata2)
+  cor_matrix <- cor(Mdata1, Mdata2)
+  cov_df <- melt(cov_matrix)
+  cor_df <- melt(cor_matrix)
+  mapping1 <- mapping1 %>%
+    mutate(Var1 = metric) %>%
+    mutate(Var1Mapping = factor(Names, levels=c("Default1", "Somatomotor", "Auditory", "Limbic", "DorsalAtt", "Visual", "Insular-Opecular")))
+  mapping2 <- mapping2 %>%
+    mutate(Var2 = metric) %>%
+    mutate(Var2Mapping = factor(Names, levels=c("Insular-Opecular", "Visual", "DorsalAtt", "Limbic", "Auditory", "Somatomotor", "Default1")))
+  CovPlot <- heatmapPlot(cov_df, "Covariance", paste0(type1, "+", type2), mapping1, mapping2)
+  CorPlot <- heatmapPlot(cor_df, "Correlation", paste0(type1, "+", type2), mapping1, mapping2)
+  ggsave(plot=CovPlot, file.path("SupplementaryCovariance", paste0("M", paste0(type1, "+", type2), "Covariance.png")), width=10, height=9, dpi=300)
+  ggsave(plot=CorPlot, file.path("SupplementaryCovariance", paste0("M", paste0(type1, "+", type2), "Correlation.png")), width=10, height=9, dpi=300)
+}
+
+covarianceBetweenSpecies <- function(MACAQUE, HUMAN, type, macaqueMapping, humanMapping) {
+  macaque <- MACAQUE[[type]] %>%
+    filter(Sex == "M") %>%
+    select(LogAge, metric, PRED.mean.pop.prop)
+  human <- HUMAN[[type]] %>%
+    filter(sex == "Male") %>%
+    select(AgeTransformed, metric, PRED.mean.pop.prop)
+  macaque <- pivot_wider(macaque, names_from = metric, values_from = PRED.mean.pop.prop)
+  human <- pivot_wider(human, names_from = metric, values_from = PRED.mean.pop.prop)
+  macaque <- macaque %>%
+    select(-LogAge)
+  human <- human %>%
+    select(-AgeTransformed)
+  cov_matrix <- cov(macaque, human)
+  cor_matrix <- cor(macaque, human)
+  cov_df <- melt(cov_matrix)
+  cor_df <- melt(cor_matrix)
+  macaqueMapping <- macaqueMapping %>%
+    mutate(Var1 = metric) %>%
+    mutate(Var1Mapping = factor(Names, levels=c("Default1", "Somatomotor", "Auditory", "Limbic", "DorsalAtt", "Visual", "Insular-Opecular")))
+  humanMapping <- humanMapping %>%
+    mutate(Var2 = metric) %>%
+    mutate(Var2Mapping = factor(Names, c("Paralimbic", "High-order Association", "Modality-specific Association", "Idiotypic (primary)")))
+  CovPlot <- heatmapPlot(cov_df, "Covariance", paste0(type, "Macaque-Human"), macaqueMapping, humanMapping)
+  CorPlot <- heatmapPlot(cor_df, "Correlation", paste0(type, "Macaque-Human"), macaqueMapping, humanMapping)
+  ggsave(plot=CovPlot, file.path("SupplementaryCovariance", paste0("M", paste0(type, "Macaque-Human"), "Covariance.png")), width=10, height=9, dpi=300)
+  ggsave(plot=CorPlot, file.path("SupplementaryCovariance", paste0("M", paste0(type, "Macaque-Human"), "Correlation.png")), width=10, height=9, dpi=300)
+}
+
+#covarianceBetweenRegion(LARGE, "Volume", BezginMapping, BezginMapping)
+#covarianceBetweenRegion(LARGE, "Area", BezginMapping, BezginMapping)
+#covarianceBetweenRegion(LARGE, "Thickness", BezginMapping, BezginMapping)
+covarianceBetweenMetrics(LARGE, "Volume", "Area", BezginMapping, BezginMapping)
+covarianceBetweenMetrics(LARGE, "Volume", "Thickness", BezginMapping, BezginMapping)
+covarianceBetweenMetrics(LARGE, "Area", "Thickness", BezginMapping, BezginMapping)
+covarianceBetweenSpecies(LARGE, LARGE.HUMAN, "Volume", BezginMapping, MesulamMapping)
+```
+
+Start from the top. We need to make covariance matrix using the raw data from each region during each stage in the lifespan
+
+```{r}
+loadData <- function(measure, ages) {
+  markovOrder <- fromJSON("../../data_v2.0/demographics/markov_order.json")
+  SUBSET.LIST <- list()
+  for (NUM in 1:length(markovOrder)) {
+    SUBSET <- readRDS(file.path("../../RDS", measure, names(markovOrder)[NUM], "SUBSET.rds"))
+    SUBSET.LIST[[names(markovOrder)[NUM]]] <- list()
+    for (IDX in 2:length(ages)) {
+      SUBSET.LIST[[names(markovOrder)[NUM]]][[paste0(ages[IDX-1], "-", ages[IDX])]] <- SUBSET %>%
+        filter(Age >= ages[IDX-1] & Age < ages[IDX])
+    }
+  }
+  return(SUBSET.LIST)
+}
+macaqueAges <- c(0, 0.33, 1, 2, 6, 15, 25)
+volume.data <- loadData("MARKOV.VOLUME.COMBAT", macaqueAges)
+area.data <- loadData("MARKOV.AREA.COMBAT", macaqueAges)
+thickness.data <- loadData("MARKOV.THICKNESS.COMBAT", macaqueAges)
+```
+
+```{r}
+library(scales)
+## Function that will compare age range to age range and make correlation matrix
+## I think all the SUBSETs are the same? So just use the first one...
+heatmapPlot <- function(data, type, metric, mapping, mapping2, age_range) {
+  if (type == "Covariance") {
+    lims <- c(-0.05, 0.05)
+  } else if (type == "Correlation") {
+    lims <- c(-0.5, 1)
+  }
+  data <- merge(data, mapping[, c("Var1", "Var1Mapping")])
+  data <- merge(data, mapping2[, c("Var2", "Var2Mapping")])
+  plot <- ggplot(data, aes(x=Var1, y=Var2, fill=value)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient2(low = "#2166ac", high = "#b2182b",  midpoint = 0,
+                       limits = lims,
+                       oob = squish,
+                       name = type) +
+    labs(x = "", y = "") +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(
+        angle = 90, 
+        hjust = 1,
+        size = 6
+        ),
+      axis.text.y = element_text(
+        size = 6
+        )
+      ) +
+    ggtitle(paste(metric, type, age_range, "yrs")) +
+    ggeasy::easy_center_title() +
+    facet_grid(Var2Mapping~Var1Mapping, scale = "free", space="free") +
+    theme(strip.text.y.right = element_text(angle = 0, hjust=0, size=14),
+          strip.text.x.top = element_text(angle = 90, hjust=0, size=14),
+          panel.spacing = unit(0, "lines"),
+          plot.title = element_text(size = 20),
+          panel.background = element_rect(fill = NA, color = "black"))
+  return(plot)
+}
+
+plotPCA <- function(PCA, age_range) {
+  library(ggplot2)
+  
+  plot <- ggplot(data=PCA, aes(x=PC1, y=PC2, color=Names), size=1.5) +
+    geom_point() +
+    scale_color_npg() +
+    ggtitle(paste(age_range, "yrs")) +
+    ggeasy::easy_center_title() +
+    theme_classic()
+  
+  plot3 <- plot_ly(PCA, x = ~PC1, y = ~PC2, z = ~PC3, type = "scatter3d", mode = "markers", color = ~as.factor(Names),
+                        marker = list(size = 5)) %>%
+  layout(scene = list(xaxis = list(title = "PC1"),
+                      yaxis = list(title = "PC2"),
+                      zaxis = list(title = "PC3")))
+  
+  return(list(twoD=plot, threeD=plot3))
+}
+
+corrMatrix <- function(data, ages, mapping, type) {
+  library(factoextra)
+  library(patchwork)
+  cov_list <- list()
+  cor_list <- list()
+  pca_cov_list <- list()
+  pca_cor_list <- list()
+  scree_cov_list <- list()
+  scree_cor_list <- list()
+  pca_cor_df_list <- list()
+  for (NUM in 2:length(ages)) {
+    age_range <- paste0(ages[NUM-1], "-", ages[NUM])
+    print(age_range)
+    df <- data[[age_range]]
+    df <- df %>%
+      select(-(1:9))
+    cov_mat <- cov(df, use = "complete.obs")
+    cor_mat <- cor(df, use = "complete.obs")
+    cov_df <- melt(cov_mat)
+    cor_df <- melt(cor_mat)
+    pca_cov <- prcomp(cov_mat, scale=TRUE, rank=20)
+    pca_cor <- prcomp(cor_mat, scale=TRUE, rank=20)
+    scree_plot_cov <- fviz_eig(pca_cov, addlabels = TRUE, ylim = c(0, 100)) +
+      ggtitle(paste(age_range, "yrs"))
+    scree_plot_cor <- fviz_eig(pca_cor, addlabels = TRUE, ylim = c(0, 100)) +
+      ggtitle(paste(age_range, "yrs"))
+    #cov_df <- cov_df %>%
+    #  mutate(value = scale(value))
+    mapping1 <- mapping %>%
+      mutate(Var1 = metric) %>%
+      mutate(Var1Mapping = factor(Names, levels=c("Default1", "Somatomotor", "Auditory", "Limbic", "DorsalAtt", "Visual", "Insular-Opecular")))
+    mapping2 <- mapping %>%
+      mutate(Var2 = metric) %>%
+      mutate(Var2Mapping = factor(Names, levels=c("Insular-Opecular", "Visual", "DorsalAtt", "Limbic", "Auditory", "Somatomotor", "Default1")))
+    ## Bind PC1 and PC2 to the melted covariance/correlation dataframes
+    pca_cov_df <- data.frame(
+      PC1 = pca_cov$x[, 1],
+      PC2 = pca_cov$x[, 2],
+      PC3 = pca_cov$x[, 3],
+      metric = row.names(pca_cov$x)
+    )
+    pca_cor_df <- data.frame(
+      PC1 = pca_cor$x[, 1],
+      PC2 = pca_cor$x[, 2],
+      PC3 = pca_cor$x[, 3],
+      metric = row.names(pca_cor$x)
+    )
+    pca_cov <- merge(pca_cov_df, mapping[, c("metric", "Names")], by="metric")
+    pca_cor <- merge(pca_cor_df, mapping[, c("metric", "Names")], by="metric")
+    CorPlot <- heatmapPlot(cor_df, "Correlation", type, mapping1, mapping2, age_range)
+    CovPlot <- heatmapPlot(cov_df, "Covariance", type, mapping1, mapping2, age_range)
+    PCACovPlot <- plotPCA(pca_cov, age_range)
+    PCACorPlot <- plotPCA(pca_cor, age_range)
+    print(PCACorPlot$threeD)
+    ## Saving the plots
+    ggsave(plot=PCACovPlot$twoD, file.path("SupplementaryCovariance", type, "PCA", paste0("Cov.", age_range, ".png")), width=4, height=3)
+    ggsave(plot=PCACorPlot$twoD, file.path("SupplementaryCovariance", type, "PCA", paste0("Cor.", age_range, ".png")), width=4, height=3)
+    ggsave(plot=CorPlot, file.path("SupplementaryCovariance", type, paste0("Cor.", age_range, ".png")), width=10, height=9)
+    ggsave(plot=CovPlot, file.path("SupplementaryCovariance", type, paste0("Cov.", age_range, ".png")), width=10, height=9)
+    ## Adding the plots to lists
+    cov_list[[NUM-1]] <- CovPlot
+    cor_list[[NUM-1]] <- CorPlot
+    pca_cov_list[[NUM-1]] <- PCACovPlot$twoD
+    pca_cor_list[[NUM-1]] <- PCACorPlot$twoD
+    scree_cov_list[[NUM-1]] <- scree_plot_cov
+    scree_cor_list[[NUM-1]] <- scree_plot_cor
+    pca_cor_df_list[[age_range]] <- pca_cov_df
+  }
+  
+  ## Now create plots that have two rows of matrices, then two rows of PCA
+  cov_patch <- wrap_plots(cov_list, nrows=2) +
+    plot_layout(guides = "collect", axis_titles = "collect")
+  cor_patch <- wrap_plots(cor_list, nrows=2) +
+    plot_layout(guides = "collect", axis_titles = "collect")
+  pca_cov_patch <- wrap_plots(pca_cov_list, nrows=2) +
+    plot_layout(guides = "collect", axis_titles = "collect")
+  pca_cor_patch <- wrap_plots(pca_cor_list, nrows=2) +
+    plot_layout(guides = "collect", axis_titles = "collect")
+  scree_cov_patch <- wrap_plots(scree_cov_list, nrows=2) +
+    plot_layout(guides = "collect", axis_titles = "collect")
+  scree_cor_patch <- wrap_plots(scree_cor_list, nrows=2) +
+    plot_layout(guides = "collect", axis_titles = "collect")
+   
+  
+  ggsave(plot=cov_patch, file.path("SupplementaryCovariance", type, "CovPatch.png"), width=30, height=20, dpi=500)
+  ggsave(plot=cor_patch, file.path("SupplementaryCovariance", type, "CorPatch.png"), width=30, height=20, dpi=500)
+  ggsave(plot=pca_cov_patch, file.path("SupplementaryCovariance", type, "PCACovPatch.png"), width=6, height=4, dpi=300)
+  ggsave(plot=pca_cor_patch, file.path("SupplementaryCovariance", type, "PCACorPatch.png"), width=6, height=4, dpi=300)
+  ggsave(plot=scree_cov_patch, file.path("SupplementaryCovariance", type, "Scree_cov.png"), width=10, height=6, dpi=300)
+  ggsave(plot=scree_cor_patch, file.path("SupplementaryCovariance", type, "Scree_cor.png"), width=10, height=6, dpi=300)
+  return(pca_cor_df_list)
+}
+#vol_cor_df <- corrMatrix(volume.data[[1]], macaqueAges, BezginMapping, "Volume")
+#area_cor_df <- corrMatrix(area.data[[1]], macaqueAges, BezginMapping, "Area")
+thickness_cor_df <- corrMatrix(thickness.data[[1]], macaqueAges, BezginMapping, "Thickness")
+```
+```{r}
+## Alignment between PC components
+alignPCA <- function(df) {
+  ## Dot product, take the sign, multiply by sign (bingo, bango, bongo)
+  df[[5]]$PC1 <- df[[5]]$PC1 * -1
+  df[[6]]$PC1 <- df[[6]]$PC1 * -1
+  return(df)
+}
+
+test <- alignPCA(thickness_cor_df)
+
+```
+
+
+
+```{r}
+## Plot the principal components on the surface 
+Visualize.Surface <- function(lh_data, rh_data, species, parcellation, save_location, color_map, color_range_min, color_range_max) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan")
+  write.table(lh_data, "Plotting/temp_lh_data.csv", col.names = FALSE, row.names = FALSE)
+  write.table(rh_data, "Plotting/temp_rh_data.csv", col.names = FALSE, row.names = FALSE)
+  system(paste("python3", "Plotting/Surface.Plotting.py", parcellation, species, save_location, color_map, color_range_min, color_range_max, "Plotting/temp_lh_data.csv", "Plotting/temp_rh_data.csv", sep = " "))
+}
+
+VisualizeComponents <- function(PCA, savePath, minValue, maxValue, color_map) {
+  for (NUM in 1:length(PCA)) {
+    PC1 <- c(0, PCA[[NUM]]$PC1)
+    PC2 <- c(0, PCA[[NUM]]$PC2)
+    savePath1 <- file.path(savePath, paste0(names(PCA)[NUM], ".PC1.png"))
+    savePath2 <- file.path(savePath, paste0(names(PCA)[NUM], ".PC2.png"))
+    Visualize.Surface(PC1, PC1, "monkey", "markov", savePath1, color_map, minValue, maxValue)
+    Visualize.Surface(PC2, PC2, "monkey", "markov", savePath2, color_map, minValue, maxValue)
+  }
+}
+type <- "Thickness"
+VisualizeComponents(
+  test,
+  file.path("Plotting/Final/SupplementaryCovariance", type, "PCA"),
+  -8,
+  8,
+  "coolwarm"
+)
+```
+
+```{r}
+## Need a new function to save the data and align/visualize
+## Save to 'type/data'
+saveData <- function(PCA, type) {
+  for (NUM in 1:length(PCA)) {
+    PC1 <- c(0, PCA[[NUM]]$PC1)
+    PC2 <- c(0, PCA[[NUM]]$PC2)
+    name <- names(PCA)[NUM]
+    write.table(PC1, file.path("SupplementaryCovariance", type, "data", paste0(name, "_PC1.csv")), col.names=FALSE, row.names=FALSE)
+    write.table(PC2, file.path("SupplementaryCovariance", type, "data", paste0(name, "_PC2.csv")), col.names=FALSE, row.names=FALSE)
+  }
+}
+
+saveData(area_cor_df, "Area")
+```
+
+```{r}
+## Generate correlation matrix between Volume and Area metrics (same metric)
+generateSpatialCorrelation <- function(LARGE, measureOne, measureTwo) {
+  metrics <- unique(LARGE[[measureOne]]$metric)
+  correlation_list <- list()
+  for (NUM in 1:length(metrics)) {
+    df_1 <- LARGE[[measureOne]] %>%
+      filter(metric == metrics[NUM])
+    df_2 <- LARGE[[measureTwo]] %>%
+      filter(metric == metrics[NUM])
+    c <- cor(df_1$PRED.m500.pop, df_2$PRED.m500.pop, method="pearson")
+    correlation_list[[metrics[NUM]]] <- c
+  }
+  correlations <- c(0, unlist(correlation_list))
+  return(correlations)
+}
+
+VolumeArea_correlations <- generateSpatialCorrelation(LARGE, "Volume", "Area")
+VolumeThickness_correlations <- generateSpatialCorrelation(LARGE, "Volume", "Thickness")
+AreaThickness_correlations <- generateSpatialCorrelation(LARGE, "Area", "Thickness")
+Visualize.Surface(VolumeArea_correlations, VolumeArea_correlations, "monkey", "markov", file.path("Plotting/Final/SupplementaryCovariance/AreaVolumeSpatialCorrelation.png"), "coolwarm", -1, 1)
+Visualize.Surface(VolumeThickness_correlations, VolumeThickness_correlations, "monkey", "markov", file.path("Plotting/Final/SupplementaryCovariance/VolumeThicknessSpatialCorrelation.png"), "coolwarm", -1, 1)
+Visualize.Surface(AreaThickness_correlations, AreaThickness_correlations, "monkey", "markov", file.path("Plotting/Final/SupplementaryCovariance/AreaThicknessSpatialCorrelation.png"), "coolwarm", -1, 1)
+```
+
+```{r}
+## Load in the peaks of the macaques
+getMacaquePeaks <- function() {
+  markovOrder <- fromJSON("../../Data/ParcellationMappings/markov_order.json")
+  PEAK.LIST <- list()
+  for (measure in c("MARKOV.VOLUME.COMBAT", "MARKOV.AREA.COMBAT", "MARKOV.THICKNESS.COMBAT")) {
+    PEAK.LIST[[measure]] <- list()
+    for (NUM in 1:length(markovOrder)) {
+      peak <- readRDS(file.path("../../RDS", measure, names(markovOrder)[NUM], "peak_CI.rds")) - 0.452
+      peak <- peak %>%
+        summarize(mean_peak = (Male_Peak + Female_Peak) / 2)
+      PEAK.LIST[[measure]][[names(markovOrder)[NUM]]] <- as.numeric(peak$mean_peak)
+    }
+  }
+  return(PEAK.LIST)
+}
+
+PEAK.LIST <- getMacaquePeaks()
+```
+
+```{r}
+getFullPeakHuman <- function(LARGE) {
+  values <- sapply(LARGE, function(X) {
+    if (length(X) == 0) {
+      return(0)
+    } else {
+      age <- X %>%
+        filter(sex == "Male") %>%
+        filter(PRED.m500.pop == max(PRED.m500.pop)) %>%
+        pull(Age)
+      return(age)
+    }
+  })
+}
+
+volumePeakHuman <- getFullPeakHuman(LARGE.HUMAN$Volume)[-5]
+areaPeakHuman <- getFullPeakHuman(LARGE.HUMAN$Area)
+thicknessPeakHuman <- getFullPeakHuman(LARGE.HUMAN$Thickness)[-5]
+```
+
+
+```{r}
+getPeakAgeCorrelation <- function(list1, list2) {
+  list1 <- as.numeric(list1)
+  list2 <- as.numeric(list2)
+  correlation_test <- cor.test(list1, list2, method = "pearson")
+  correlation_coefficient <- correlation_test$estimate
+  p_value <- correlation_test$p.value
+  result <- list(
+    correlation_coefficient = correlation_coefficient,
+    p_value = p_value
+  )
+  return(result)
+}
+
+volAreaMonkey <- getPeakAgeCorrelation(PEAK.LIST$MARKOV.VOLUME.COMBAT, PEAK.LIST$MARKOV.AREA.COMBAT)
+volThicknessMonkey <- getPeakAgeCorrelation(PEAK.LIST$MARKOV.VOLUME.COMBAT, PEAK.LIST$MARKOV.THICKNESS.COMBAT)
+areaThicknessMonkey <- getPeakAgeCorrelation(PEAK.LIST$MARKOV.AREA.COMBAT, PEAK.LIST$MARKOV.THICKNESS.COMBAT)
+#volAreaHuman <- getPeakAgeCorrelation(volumePeakHuman, areaPeakHuman)
+#volThicknessHuman <- getPeakAgeCorrelation(volumePeakHuman, thicknessPeakHuman)
+#areaThicknessHuman <- getPeakAgeCorrelation(areaPeakHuman, thicknessPeakHuman)
+print("MONKEY VOL-AREA:")
+volAreaMonkey
+print("MONKEY VOL-THICKNESS:")
+volThicknessMonkey
+print("MONKEY AREA-THICKNESS:")
+areaThicknessMonkey
+#print("HUMAN VOL-AREA:")
+#volAreaHuman
+#print("HUMAN VOL-THICKNESS:")
+#volThicknessHuman
+#print("HUMAN AREA-THICKNESS:")
+#areaThicknessHuman
+```
+

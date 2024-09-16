@@ -1,0 +1,796 @@
+This file is for creating plots of the GAMLSS modeling section of the supplementary
+
+```{r}
+## Make QQ plots of model fits for four global phenotypes
+source("../../301.functions.r")
+loadModels <- function(metrics) {
+  HOLDER <- list()
+  basePath <- file.path("../../RDS/ASEG.VOLUME.COMBAT")
+  for (metric in metrics) {
+    PRIMARY <- list()
+    PRIMARY$SUBSET <- readRDS(file.path(basePath, metric, "SUBSET.rds"))
+    PRIMARY$MODEL <- readRDS(file.path(basePath, metric, "MODEL.rds"))
+    PRIMARY$FIT.EXTRACT <- readRDS(file.path(basePath, metric, "FIT.EXTRACT.rds"))
+    PRIMARY$CURVE <- Apply.Param(
+      NEWData=PRIMARY$SUBSET,
+      FITParam=PRIMARY$FIT.EXTRACT$param,
+      Add.Normalise=TRUE,
+      Add.Derivative=FALSE
+    )
+    PRIMARY$CURVE$residuals <- PRIMARY$CURVE[, metric] - PRIMARY$CURVE$PRED.mean.pop
+    HOLDER[[metric]] <- PRIMARY
+  }
+  return(HOLDER)
+} 
+PRIMARY <- loadModels(c("TotalGrayVol", "CorticalWhiteMatterVol", "SubCortGrayVol", "Total.Lateral.Ventricle"))
+```
+
+```{r}
+## Need to make QQ plots
+
+```
+
+```{r}
+## Function for plotting mu random effect
+plotMuRanef <- function(measure, title) {
+  randef.ci <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "MU.RANDEF.CI.rds"))
+  SUBSET <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "SUBSET.rds"))
+  mean_age <- SUBSET %>%
+    group_by(Site) %>%
+    summarise(mean_age = mean(AgeTransformed))
+  randef.ci$Site <- row.names(randef.ci)
+  randef.ci <- merge(randef.ci, mean_age, by="Site")
+  randef.ci$Site <- factor(randef.ci$Site, levels = mean_age$Site[order(mean_age$mean_age)])
+  randef.ci$range <- abs(randef.ci$mu.0.975.upper - randef.ci$mu.0.025.lower)
+  View(randef.ci)
+  scatter <- ggplot() +
+    geom_point(data = randef.ci, aes(x = mu, y = Site, color = mean_age), size = 5, alpha = 0.5) +
+    geom_errorbarh(data = randef.ci, aes(xmin = mu.0.025.lower, xmax = mu.0.975.upper, y = Site), height = 0.1) +
+    ylab("Site") +
+    theme_classic() +
+    scale_color_gradient(low = "gray", high = "red", limits=c(0, 25)) +
+    theme(
+      panel.grid.major.y = element_line(color = "gray", linetype = "dashed", size = 0.3)
+    ) +
+    ggtitle(title) +
+    ggeasy::easy_center_title()
+  return(scatter)
+}
+GMV <- plotMuRanef("TotalGrayVol", "GMV")
+WMV <- plotMuRanef("CorticalWhiteMatterVol", "WMV")
+sGMV <- plotMuRanef("SubCortGrayVol", "sGMV")
+VENT <- plotMuRanef("Total.Lateral.Ventricle", "Ventricular Volume")
+plot <- GMV + WMV + sGMV + VENT+
+  plot_layout(
+    guides = "collect",
+    axis_titles = "collect"
+  )
+ggsave(plot=plot, file.path("SupplementaryGAMLSSImages/GlobalPhenotypeMu.png"), width=8, height=10, dpi=300)
+ggsave(plot=plot, file.path("SupplementaryGAMLSSImages/GlobalPhenotypeMu.pdf"), width=8, height=10, dpi=300)
+plot
+```
+## Stats on mean age vs mu effect
+
+```{r}
+plotMuRanef <- function(measure) {
+  randef.ci <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "MU.RANDEF.CI.rds"))
+  SUBSET <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "SUBSET.rds"))
+  mean_age <- SUBSET %>%
+    group_by(Site) %>%
+    summarise(mean_age = mean(AgeTransformed))
+  randef.ci$Site <- row.names(randef.ci)
+  randef.ci <- merge(randef.ci, mean_age, by="Site")
+  randef.ci$Site <- factor(randef.ci$Site, levels = mean_age$Site[order(mean_age$mean_age)])
+  randef.ci$range <- abs(randef.ci$mu.0.975.upper - randef.ci$mu.0.025.lower)
+  model <- lm(mu ~ mean_age, data = randef.ci)
+  summary(model)
+}
+plotMuRanef("Total.Lateral.Ventricle")
+```
+
+
+
+```{r}
+## Function for scatterplot with correlation
+# X: Median Age
+# Y: Mu ranef
+
+plotAgeMu <- function(measure, title) {
+  library(lmerTest)
+  randef.ci <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "MU.RANDEF.CI.rds"))
+  randef.ci$Site <- row.names(randef.ci)
+  SUBSET <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "SUBSET.rds"))
+  median_age <- SUBSET %>%
+    group_by(Site) %>%
+    summarise(median_age = median(Age))
+  
+  plotting <- merge(median_age, randef.ci, by="Site")
+  plot <- ggplot(data=plotting, aes(x=median_age, y=mu)) +
+    geom_point(size=3) +
+    theme_minimal() +
+    theme(legend.position="none", axis.line=element_line()) +
+    geom_smooth(method = "lm", se = TRUE, color = "black", fill = "black", alpha = 0.3) +
+    xlab("Median Age (yrs)") +
+    ylab("Mu") +
+    ggtitle(title) +
+    ggeasy::easy_center_title()
+  
+  return(plot)
+}
+
+GMV <- plotAgeMu("TotalGrayVol", "GMV")
+WMV <- plotAgeMu("CorticalWhiteMatterVol", "WMV")
+sGMV <- plotAgeMu("SubCortGrayVol", "sGMV")
+VENT <- plotAgeMu("Total.Lateral.Ventricle", "Ventricular Volume")
+plot <- GMV + WMV + sGMV + VENT +
+  plot_layout(
+    axis_titles = "collect"
+  )
+ggsave(plot=plot, "SupplementaryGAMLSSImages/MuRandefAge.png", width=6, height=4, dpi=300)
+ggsave(plot=plot, "SupplementaryGAMLSSImages/MuRandefAge.pdf", width=6, height=4, dpi=300)
+plot
+```
+
+ASSOCIATION BETWEEN MU AND MEDIAN AGE
+
+```{r}
+library(lmerTest) 
+library(dplyr) 
+library(ggplot2) 
+library(purrr) 
+library(broom) 
+library(stats) 
+
+# Define the function to analyze multiple measures 
+analyze_measures <- function(measures) { 
+
+  # Helper function to fit linear model and extract p-value and t-score 
+  fit_model <- function(measure) { 
+    randef.ci <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "MU.RANDEF.CI.rds")) 
+    randef.ci$Site <- row.names(randef.ci) 
+    SUBSET <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "SUBSET.rds")) 
+    median_age <- SUBSET %>% 
+      group_by(Site) %>% 
+      summarise(median_age = median(Age)) 
+
+    plotting <- merge(median_age, randef.ci, by="Site") 
+
+    model <- lm(mu ~ median_age, data=plotting) 
+
+    # Extract t-value and p-value
+    model_summary <- tidy(model)
+    result <- model_summary %>% 
+      filter(term == "median_age") %>% 
+      select(estimate, std.error, statistic, p.value) %>% 
+      rename(
+        estimate = estimate,
+        std_error = std.error,
+        t_value = statistic,
+        p_value = p.value
+      ) %>% 
+      as.list() %>% 
+      unlist()
+    
+    return(result) 
+  } 
+
+  # Analyze each measure and collect results 
+  results <- map_df(measures, fit_model, .id = "measure") 
+
+  # Perform FDR correction on p-values 
+  fdr_corrected <- p.adjust(results$p_value, method = "fdr") 
+
+  # Add FDR corrected p-values to results 
+  results <- results %>% 
+    mutate(fdr_corrected_p_value = fdr_corrected) 
+
+  # Print results 
+  print(results) 
+  return(results) 
+} 
+
+# Example usage 
+measures <- c("TotalGrayVol", "CorticalWhiteMatterVol", "SubCortGrayVol", "Total.Lateral.Ventricle")  # Replace with actual measure names 
+results <- analyze_measures(measures)
+```
+
+```{r}
+## Function to loop through and create GAMLSS models for all the base phenotypes
+refitGAMLSS <- function(PRIMARY) {
+  ## TotalGrayVol
+  PRIMARY$TotalGrayVol$GAMLSSRefit <- gamlss(
+    formula=formula(PRIMARY$TotalGrayVol$MODEL$mu),
+    sigma.formula=formula(PRIMARY$TotalGrayVol$MODEL$sigma),
+    nu.formula=formula(PRIMARY$TotalGrayVol$MODEL$nu),
+    family=PRIMARY$TotalGrayVol$MODEL$family,
+    data=PRIMARY$TotalGrayVol$SUBSET,
+    contrasts=PRIMARY$TotalGrayVol$MODEL$contrasts,
+    control=gamlss.control(n.cyc=200)
+  )
+  predicted_values <- predict(PRIMARY$TotalGrayVol$GAMLSSRefit, newdata = PRIMARY$TotalGrayVol$SUBSET, type = "response")
+  PRIMARY$TotalGrayVol$CURVE$new_predictions <- predicted_values
+  
+  ## CorticalWhiteMatterVol
+  PRIMARY$CorticalWhiteMatterVol$GAMLSSRefit <- gamlss(
+    formula=formula(PRIMARY$CorticalWhiteMatterVol$MODEL$mu),
+    sigma.formula=formula(PRIMARY$CorticalWhiteMatterVol$MODEL$sigma),
+    nu.formula=formula(PRIMARY$CorticalWhiteMatterVol$MODEL$nu),
+    family=PRIMARY$CorticalWhiteMatterVol$MODEL$family,
+    data=PRIMARY$CorticalWhiteMatterVol$SUBSET,
+    contrasts=PRIMARY$CorticalWhiteMatterVol$MODEL$contrasts,
+    control=gamlss.control(n.cyc=200)
+  )
+  predicted_values <- predict(PRIMARY$CorticalWhiteMatterVol$GAMLSSRefit, newdata = PRIMARY$CorticalWhiteMatterVol$SUBSET, type="response")
+  PRIMARY$CorticalWhiteMatterVol$CURVE$new_predictions <- predicted_values
+  
+  ## SubCortGrayVol
+  PRIMARY$SubCortGrayVol$GAMLSSRefit <- gamlss(
+    formula=formula(PRIMARY$SubCortGrayVol$MODEL$mu),
+    sigma.formula=formula(PRIMARY$SubCortGrayVol$MODEL$sigma),
+    nu.formula=formula(PRIMARY$SubCortGrayVol$MODEL$nu),
+    family=PRIMARY$SubCortGrayVol$MODEL$family,
+    data=PRIMARY$SubCortGrayVol$SUBSET,
+    contrasts=PRIMARY$SubCortGrayVol$MODEL$contrasts,
+    control=gamlss.control(n.cyc=200)
+  )
+  predicted_values <- predict(PRIMARY$SubCortGrayVol$GAMLSSRefit, newdata = PRIMARY$SubCortGrayVol$SUBSET, type="response")
+  PRIMARY$SubCortGrayVol$CURVE$new_predictions <- predicted_values
+  
+  ## Total.Lateral.Ventricle
+  PRIMARY$Total.Lateral.Ventricle$GAMLSSRefit <- gamlss(
+    formula=formula(PRIMARY$Total.Lateral.Ventricle$MODEL$mu),
+    sigma.formula=formula(PRIMARY$Total.Lateral.Ventricle$MODEL$sigma),
+    nu.formula=formula(PRIMARY$Total.Lateral.Ventricle$MODEL$nu),
+    family=PRIMARY$Total.Lateral.Ventricle$MODEL$family,
+    data=PRIMARY$Total.Lateral.Ventricle$SUBSET,
+    contrasts=PRIMARY$Total.Lateral.Ventricle$MODEL$contrasts,
+    control=gamlss.control(n.cyc=200)
+  )
+  predicted_values <- predict(PRIMARY$Total.Lateral.Ventricle$GAMLSSRefit, newdata = PRIMARY$Total.Lateral.Ventricle$SUBSET, type="response")
+  PRIMARY$Total.Lateral.Ventricle$CURVE$new_predictions <- predicted_values
+  
+  return(PRIMARY)
+}
+PRIMARY <- refitGAMLSS(PRIMARY)
+```
+
+```{r}
+## Check whether the model fits look good
+ggplot(data=PRIMARY$Total.Lateral.Ventricle$CURVE) +
+  geom_point(aes(x=LogAge, y=new_predictions), color="red") +
+  geom_point(aes(x=LogAge, y=PRED.mean.wre), color="blue")
+```
+```{r}
+GMV <- plot(PRIMARY$TotalGrayVol$GAMLSSRefit)
+WMV <- plot(PRIMARY$CorticalWhiteMatterVol$GAMLSSRefit)
+sGMV <- plot(PRIMARY$SubCortGrayVol$GAMLSSRefit)
+VENT <- plot(PRIMARY$Total.Lateral.Ventricle$GAMLSSRefit)
+```
+```{r}
+plot(PRIMARY$SubCortGrayVol$GAMLSSRefit)
+```
+```{r}
+GMV <- dtop(PRIMARY$TotalGrayVol$GAMLSSRefit)
+WMV <- dtop(PRIMARY$CorticalWhiteMatterVol$GAMLSSRefit)
+sGMV <- dtop(PRIMARY$SubCortGrayVol$GAMLSSRefit)
+VENT <- dtop(PRIMARY$Total.Lateral.Ventricle$GAMLSSRefit)
+```
+
+```{r}
+## Plotting standard deviation against mu random effect for each study
+plotAgeMuSdDev <- function(measure, title) {
+  library(lmerTest)
+  randef.ci <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "MU.RANDEF.CI.rds"))
+  randef.ci$Site <- row.names(randef.ci)
+  SUBSET <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "SUBSET.rds"))
+  sd_age <- SUBSET %>%
+    group_by(Site) %>%
+    summarise(sd_age = sd(Age))
+  
+  plotting <- merge(sd_age, randef.ci, by="Site")
+  plot <- ggplot(data=plotting, aes(x=sd_age, y=mu)) +
+    geom_point(size=3) +
+    theme_minimal() +
+    theme(legend.position="none", axis.line=element_line()) +
+    geom_smooth(method = "lm", se = TRUE, color = "black", fill = "black", alpha = 0.3) +
+    xlab("Standard Deviation of Age (yrs)") +
+    ylab("Mu") +
+    ggtitle(title) +
+    ggeasy::easy_center_title()
+  
+  return(plot)
+}
+GMV <- plotAgeMuSdDev("TotalGrayVol", "GMV")
+WMV <- plotAgeMuSdDev("CorticalWhiteMatterVol", "WMV")
+sGMV <- plotAgeMuSdDev("SubCortGrayVol", "sGMV")
+VENT <- plotAgeMuSdDev("Total.Lateral.Ventricle", "Ventricular Volume")
+plot <- GMV + WMV + sGMV + VENT +
+  plot_layout(
+    axis_titles = "collect"
+  )
+ggsave(plot=plot, "SupplementaryGAMLSSImages/MuRandefAgeSd.png", width=6, height=4, dpi=300)
+ggsave(plot=plot, "SupplementaryGAMLSSImages/MuRandefAgeSd.pdf", width=6, height=4, dpi=300)
+plot
+```
+LINEAR TEST MU VS SD OF SAMPLE AGE
+
+```{r}
+analyze_measures <- function(measures) { 
+
+  # Helper function to fit linear model and extract p-value and t-score 
+  fit_model <- function(measure) { 
+    randef.ci <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "MU.RANDEF.CI.rds")) 
+    randef.ci$Site <- row.names(randef.ci) 
+    SUBSET <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "SUBSET.rds")) 
+    sd_age <- SUBSET %>% 
+      group_by(Site) %>% 
+      summarise(sd_age = sd(Age)) 
+
+    plotting <- merge(sd_age, randef.ci, by="Site") 
+
+    model <- lm(mu ~ sd_age, data=plotting) 
+
+    # Extract t-value and p-value
+    model_summary <- tidy(model)
+    result <- model_summary %>% 
+      filter(term == "sd_age") %>% 
+      select(estimate, std.error, statistic, p.value) %>% 
+      rename(
+        estimate = estimate,
+        std_error = std.error,
+        t_value = statistic,
+        p_value = p.value
+      ) %>% 
+      as.list() %>% 
+      unlist()
+    
+    return(result) 
+  } 
+
+  # Analyze each measure and collect results 
+  results <- map_df(measures, fit_model, .id = "measure") 
+
+  # Perform FDR correction on p-values 
+  fdr_corrected <- p.adjust(results$p_value, method = "fdr") 
+
+  # Add FDR corrected p-values to results 
+  results <- results %>% 
+    mutate(fdr_corrected_p_value = fdr_corrected) 
+
+  # Print results 
+  print(results) 
+  return(results) 
+} 
+# Example usage
+measures <- c("TotalGrayVol", "CorticalWhiteMatterVol", "SubCortGrayVol", "Total.Lateral.Ventricle")  # Replace with actual measure names
+results <- analyze_measures(measures)
+```
+
+
+
+
+```{r}
+## Generate plots for sample size against the Mu Random Effect
+plotAgeMuSampleSize <- function(measure, title) {
+  library(lmerTest)
+  randef.ci <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "MU.RANDEF.CI.rds"))
+  randef.ci$Site <- row.names(randef.ci)
+  SUBSET <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "SUBSET.rds"))
+  sample_size <- SUBSET %>%
+    group_by(Site) %>%
+    summarise(sample_size = log(n()))
+  
+  plotting <- merge(sample_size, randef.ci, by="Site")
+  plot <- ggplot(data=plotting, aes(x=sample_size, y=mu)) +
+    geom_point(size=3) +
+    theme_minimal() +
+    theme(legend.position="none", axis.line=element_line()) +
+    geom_smooth(method = "lm", se = TRUE, color = "black", fill = "black", alpha = 0.3) +
+    xlab("log(Sample Size)") +
+    ylab("Mu") +
+    ggtitle(title) +
+    ggeasy::easy_center_title()
+  
+  return(plot)
+}
+GMV <- plotAgeMuSampleSize("TotalGrayVol", "GMV")
+WMV <- plotAgeMuSampleSize("CorticalWhiteMatterVol", "WMV")
+sGMV <- plotAgeMuSampleSize("SubCortGrayVol", "sGMV")
+VENT <- plotAgeMuSampleSize("Total.Lateral.Ventricle", "Ventricular Volume")
+plot <- GMV + WMV + sGMV + VENT +
+  plot_layout(
+    axis_titles = "collect"
+  )
+ggsave(plot=plot, "SupplementaryGAMLSSImages/MuRandefAgeSampleSize.png", width=6, height=4, dpi=300)
+ggsave(plot=plot, "SupplementaryGAMLSSImages/MuRandefAgeSampleSize.pdf", width=6, height=4, dpi=300)
+plot
+```
+
+```{r}
+analyze_measures <- function(measures) { 
+
+  # Helper function to fit linear model and extract p-value and t-score 
+  fit_model <- function(measure) { 
+    randef.ci <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "MU.RANDEF.CI.rds")) 
+    randef.ci$Site <- row.names(randef.ci) 
+    SUBSET <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", measure, "SUBSET.rds")) 
+    sample_size <- SUBSET %>% 
+      group_by(Site) %>% 
+      summarise(sample_size = log(n())) 
+
+    plotting <- merge(sample_size, randef.ci, by="Site") 
+
+    model <- lm(mu ~ sample_size, data=plotting) 
+
+    # Extract t-value and p-value
+    model_summary <- tidy(model)
+    result <- model_summary %>% 
+      filter(term == "sample_size") %>% 
+      select(estimate, std.error, statistic, p.value) %>% 
+      rename(
+        estimate = estimate,
+        std_error = std.error,
+        t_value = statistic,
+        p_value = p.value
+      ) %>% 
+      as.list() %>% 
+      unlist()
+    
+    return(result) 
+  } 
+
+  # Analyze each measure and collect results 
+  results <- map_df(measures, fit_model, .id = "measure") 
+
+  # Perform FDR correction on p-values 
+  fdr_corrected <- p.adjust(results$p_value, method = "fdr") 
+
+  # Add FDR corrected p-values to results 
+  results <- results %>% 
+    mutate(fdr_corrected_p_value = fdr_corrected) 
+
+  # Print results 
+  print(results) 
+  return(results) 
+} 
+# Example usage
+measures <- c("TotalGrayVol", "CorticalWhiteMatterVol", "SubCortGrayVol", "Total.Lateral.Ventricle")  # Replace with actual measure names
+results <- analyze_measures(measures)
+
+# Example usage
+measures <- c("TotalGrayVol", "CorticalWhiteMatterVol", "SubCortGrayVol", "Total.Lateral.Ventricle")  # Replace with actual measure names
+results <- analyze_measures(measures)
+```
+
+```{r}
+## Run linear test on the sample size of the primary study and the mu random effect
+runMuLinearTest <- function() {
+  ## Calculate median age by Site
+  SUBSET <- readRDS("../../RDS/ASEG.VOLUME/TotalGrayVol/SUBSET.rds")
+  sample_size <- SUBSET %>%
+    group_by(Site) %>%
+    summarise(sample_size = n())
+  
+  metrics <- c("TotalGrayVol", "CorticalWhiteMatterVol", "SubCortGrayVol", "Total.Lateral.Ventricle")
+  data <- data.frame(
+    Site = row.names(readRDS("../../RDS/ASEG.VOLUME/TotalGrayVol/MU.RANDEF.CI.rds"))
+  )
+  for (metric in metrics) {
+    newData <- readRDS(file.path("../../RDS/ASEG.VOLUME", metric, "MU.RANDEF.CI.rds"))
+    newData$Site <- row.names(newData)
+    colnames(newData)[1] <- metric
+    data <- merge(data, newData[, c("Site", metric)], by="Site")
+  }
+  data <- merge(sample_size, data, by="Site")
+  long_data <- pivot_longer(
+    data, 
+    cols = c("TotalGrayVol", "CorticalWhiteMatterVol", "SubCortGrayVol", "Total.Lateral.Ventricle"), 
+    names_to = "metric", 
+    values_to = "mu"
+    )
+  return(long_data)
+}
+
+muRandomEffectSampleSize <- runMuLinearTest()
+result <- lmTestRandef(muRandomEffectSampleSize, "sample_size")
+```
+
+In order to check the strength of GAMLSS modeling with random effects for study harmonization, we should compare the performance of ComBat against our current approach. We should also show the results of having no batch correction at all.
+
+<<< INSERT HERE >>>
+
+I want to visualize all the trajectories across all parcellations.
+Lets bring in the plotting functions and loop through them.
+
+```{r}
+## Scatterplot function for creating the matrix
+scatter <- function(measure, metric) {
+  library(ggplot2)
+  data <- readRDS(file.path("../../RDS", measure, metric, "SUBSET.rds"))
+  if (is.null(data)) {
+    return()
+  }
+  scatter <- ggplot() +
+    geom_point(data=data, aes_string(x="LogAge", y=metric, color="Sex"), size=2) +
+    scale_colour_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    scale_x_continuous(
+      breaks = c(log(0.452), log(1.452), log(3.452), log(6.452), log(10.452), log(30.452)),
+      labels = c("Birth", "1yr", "3yr", "6yr", "10yr", "30yr")
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(size=10),
+      axis.text.y = element_text(size=10),
+      plot.title = element_text(size=12)
+    ) +
+    xlab("") +
+    ylab("") +
+    ggtitle(metric) +
+    ggeasy::easy_center_title() 
+  
+  return(scatter)
+}
+
+loopScatterMatrix <- function(measure) {
+  if (measure %in% c("MARKOV.VOLUME.COMBAT", "MARKOV.AREA.COMBAT", "MARKOV.THICKNESS.COMBAT")) {
+    markovOrder <- fromJSON("../../Data/ParcellationMappings/markov_order.json")
+    plots <- list()
+    for (NUM in 1:length(markovOrder)) {
+      plot <- scatter(measure, names(markovOrder[NUM]))
+      plots[[names(markovOrder[NUM])]] <- plot
+    }
+    patch <- wrap_plots(
+      grobs = plots,
+      ncol = 7,
+      nrow = 13
+    ) +
+      plot_layout(
+        guides = "collect",
+        axis_titles = "collect"
+      )
+    
+    return(patch)
+  } else if (measure == "ASEG.VOLUME.COMBAT") {
+    names <- c("Left.Thalamus.Proper", "Right.Thalamus.Proper", "Left.Caudate", "Right.Caudate",
+               "Left.Putamen", "Right.Putamen", "Left.Pallidum", "Right.Pallidum",
+               "Left.Amygdala", "Right.Amygdala", "Left.Hippocampus", "Right.Hippocampus",
+               "Left.Cerebellum.Cortex", "Right.Cerebellum.Cortex")
+    plots <- list()
+    for (NUM in 1:length(names)) {
+      plot <- scatter(measure, names[NUM])
+      plots[[NUM]] <- plot
+    }
+    patch <- wrap_plots(
+      grobs = plots,
+      ncol = 7,
+      nrow = 2
+    ) +
+      plot_layout(
+        guides = "collect",
+        axis_titles = "collect"
+      )
+    return(patch)
+  }
+}
+
+scatter <- loopScatterMatrix("ASEG.VOLUME.COMBAT")
+ggsave(plot=scatter, "SupplementaryGAMLSSImages/MatrixPlots/SubcortScatter.png", width=20, height=4)
+ggsave(plot=scatter, "SupplementaryGAMLSSImages/MatrixPlots/SubcortScatter.pdf", width=20, height=4)
+```
+
+```{r}
+## Centile function for matrix
+centiles <- function(measure, metric) {
+  library(ggplot2)
+  source("../../301.functions.r")
+  FIT.EXTRACT <- readRDS(file.path("../../../BrainChartsCode/PRIME-DE-Lifespan/RDS", measure, metric, "FIT.EXTRACT.rds"))
+  if (is.null(FIT.EXTRACT)) {
+    return()
+  }
+  curve <- Apply.Param(
+      NEWData = rbind(
+        expand.grid(list(FakeAge = seq(0.452, 35, by = 0.002), Sex = "F")),
+        expand.grid(list(FakeAge = seq(0.452, 35, by = 0.002), Sex = "M"))
+      ),
+      FITParam = FIT.EXTRACT$param
+    )
+  curve$LogAge <- log(curve$FakeAge)
+  centile <- ggplot() +
+    geom_line(data=curve, aes_string(x="LogAge", y="PRED.mean.pop", color="Sex"), size=1.5) +
+    geom_line(data=curve, aes_string(x="LogAge", y="PRED.l025.pop", color="Sex"), linetype="dotted", size=1, alpha=0.6) +
+    geom_line(data=curve, aes_string(x="LogAge", y="PRED.u975.pop", color="Sex"), linetype="dotted", size=1, alpha=0.6) +
+    scale_colour_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    scale_x_continuous(
+      breaks = c(log(0.452), log(1.452), log(3.452), log(6.452), log(10.452), log(30.452)),
+      labels = c("Birth", "1yr", "3yr", "6yr", "10yr", "30yr")
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(size=10),
+      axis.text.y = element_text(size=10),
+      plot.title = element_text(size=12)
+    ) +
+    xlab("") +
+    ylab("") +
+    ggtitle(metric) +
+    ggeasy::easy_center_title() 
+  
+  return(centile)
+}
+
+loopCentileMatrix <- function(measure) {
+  if (measure %in% c("MARKOV.VOLUME.COMBAT", "MARKOV.AREA.COMBAT", "MARKOV.THICKNESS.COMBAT")) {
+    markovOrder <- fromJSON("../../Data/ParcellationMappings/markov_order.json")
+    plots <- list()
+    for (NUM in 1:length(markovOrder)) {
+      plot <- centiles(measure, names(markovOrder[NUM]))
+      plots[[names(markovOrder[NUM])]] <- plot
+    }
+    patch <- wrap_plots(
+      grobs = plots,
+      ncol = 7,
+      nrow = 13
+    ) +
+      plot_layout(
+        guides = "collect",
+        axis_titles = "collect"
+      )
+    
+    return(patch)
+  } else if (measure == "ASEG.VOLUME.COMBAT") {
+    names <- c("Left.Thalamus.Proper", "Right.Thalamus.Proper", "Left.Caudate", "Right.Caudate",
+               "Left.Putamen", "Right.Putamen", "Left.Pallidum", "Right.Pallidum",
+               "Left.Amygdala", "Right.Amygdala", "Left.Hippocampus", "Right.Hippocampus",
+               "Left.Cerebellum.Cortex", "Right.Cerebellum.Cortex")
+    plots <- list()
+    for (NUM in 1:length(names)) {
+      plot <- centiles(measure, names[NUM])
+      plots[[NUM]] <- plot
+    }
+    patch <- wrap_plots(
+      grobs = plots,
+      ncol = 7,
+      nrow = 2
+    ) +
+      plot_layout(
+        guides = "collect",
+        axis_titles = "collect"
+      )
+    return(patch)
+  }
+  
+}
+
+plot <- loopCentileMatrix("MARKOV.THICKNESS.COMBAT")
+ggsave(plot=plot, "SupplementaryGAMLSSImages/MatrixPlots/ThicknessCentiles.png", width=20, height=20, dpi=300)
+#ggsave(plot=plot, "SupplementaryGAMLSSImages/MatrixPlots/VolumeCentiles.svg", width=20, height=20)
+```
+
+```{r}
+## Matrix plots for the site curves
+site.curves <- function(measure, metric) {
+  if (!file.exists(file.path("../../RDS", measure, metric, "SITE.CURVES.rds"))) {
+    return()
+  }
+  SITE.CURVE <- readRDS(file.path("../../RDS", measure, metric, "SITE.CURVES.rds"))
+  PLOTTING.DF <- cbind(cat=rep(names(SITE.CURVE), sapply(SITE.CURVE, nrow)), do.call(rbind, SITE.CURVE))
+
+  site.curve <- ggplot(data=subset(PLOTTING.DF, Sex=="M"), aes(x=LogAge, y=PRED.m500.wre, color=Site)) +
+    geom_line() +
+    theme_classic() +
+    xlab("") +
+    ylab("") +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(size=10),
+      axis.text.y = element_text(size=10),
+      plot.title = element_text(size=9),
+      legend.position = "none"
+    ) +
+    scale_x_continuous(
+      breaks = c(log(0.452), log(1.452), log(3.452), log(6.452), log(10.452), log(30.452)),
+      labels = c("Birth", "1yr", "3yr", "6yr", "10yr", "30yr")
+    ) +
+    ggtitle(metric) +
+    ggeasy::easy_center_title()
+      
+    return(site.curve)
+}
+
+loopSiteCurveMatrix <- function(measure) {
+  markovOrder <- fromJSON("../../data_v2.0/demographics/markov_order.json")
+  plots <- list()
+  for (NUM in 1:length(markovOrder)) {
+    plot <- site.curves(measure, names(markovOrder[NUM]))
+    plots[[names(markovOrder[NUM])]] <- plot
+  }
+  patch <- wrap_plots(
+    grobs = plots,
+    ncol = 7,
+    nrow = 13
+  ) +
+    plot_layout(
+      guides = "collect",
+      axis_titles = "collect"
+    )
+    
+  return(patch)
+}
+
+plot <- loopSiteCurveMatrix("MARKOV.AREA.COMBAT")
+ggsave(plot=plot, "SupplementaryGAMLSSImages/MatrixPlots/AreaSiteCurves.png", width=20, height=20)
+ggsave(plot=plot, "SupplementaryGAMLSSImages/MatrixPlots/AreaSiteCurves.pdf", width=20, height=20)
+```
+
+```{r}
+## Growth rate matrix plot
+growth <- function(measure, metric) {
+  source("../../301.functions.r")
+  FIT.EXTRACT <- readRDS(file.path("../../RDS", measure, metric, "FIT.EXTRACT.rds"))
+  curve <- Apply.Param(
+      NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(0.452, 35, by = 0.002), Sex = "F")),
+        expand.grid(list(AgeTransformed = seq(0.452, 35, by = 0.002), Sex = "M"))
+      ),
+      FITParam = FIT.EXTRACT$param
+    )
+  curve$LogAge <- log(curve$AgeTransformed)
+  curve <- curve %>%
+    mutate(AgeTransformed = round(AgeTransformed, 3)) %>%
+    group_by(Sex) %>%
+    mutate(PRED.mean.pop.normalized = (PRED.mean.pop - mean(PRED.mean.pop)) / sd(PRED.mean.pop)) %>% ## IS NORMALIZING NECESSARY? 
+    mutate(PRED.mean.pop.normalized.slope = c(NA, diff(PRED.mean.pop)))
+  
+  female_peak_index <- which.max(curve$PRED.mean.pop.normalized.slope[curve$Sex == "F"])
+  female_crossing_age <- curve$LogAge[curve$Sex == "F"][female_peak_index]
+  
+  plot <- ggplot() +
+    geom_line(data=curve, aes(x=LogAge, y=PRED.mean.pop.normalized.slope, color=Sex)) +
+    geom_vline(xintercept = female_crossing_age) +
+    geom_hline(yintercept = 0) +
+    scale_colour_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    scale_x_continuous(
+      breaks = c(log(0.452), log(1.452), log(3.452), log(6.452), log(10.452), log(30.452)),
+      labels = c("Birth", "1yr", "3yr", "6yr", "10yr", "30yr")
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      axis.text.x = element_text(size=10),
+      axis.text.y = element_text(size=10),
+      plot.title = element_text(size=9)
+    ) +
+    xlab("") +
+    ylab("") +
+    ggtitle(metric) +
+    ggeasy::easy_center_title() 
+    
+  
+  return(plot)
+}  
+
+loopGrowthMatrix <- function(measure) {
+  markovOrder <- fromJSON("../../Data/ParcellationMappings/markov_order.json")
+  plots <- list()
+  for (NUM in 1:length(markovOrder)) {
+    plot <- growth(measure, names(markovOrder[NUM]))
+    plots[[names(markovOrder[NUM])]] <- plot
+  }
+  patch <- wrap_plots(
+    grobs = plots,
+    ncol = 7,
+    nrow = 13
+  ) +
+    plot_layout(
+      guides = "collect",
+      axis_titles = "collect"
+    )
+    
+  return(patch)
+}
+
+plot <- loopGrowthMatrix("MARKOV.THICKNESS.COMBAT")
+ggsave(plot=plot, "SupplementaryGAMLSSImages/MatrixPlots/ThicknessGrowth.png", width=20, height=20)
+ggsave(plot=plot, "SupplementaryGAMLSSImages/MatrixPlots/ThicknessGrowth.pdf", width=20, height=20)
+```
+

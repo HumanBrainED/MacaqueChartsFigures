@@ -1,0 +1,403 @@
+File for Figure 2 of Brain Charts for the Rhesus Macaque
+Figure 2: Geometric Phenotype Trajectories + Growth Surface
+  Geometric phenotypes (intracranial volume, surface area, mean thickness) and their associated lifespan trajectories
+  Growth rates on surface at global phenotype peak
+  
+TO DO:
+  Fix the sizing and titles
+  Manually insert the surface images
+
+```{r}
+## Load all the data into LARGE
+## Data includes:
+## ASEG.VOLUME.COMBAT/BrainSegVol
+## MARKOV.AREA.COMBAT/Total.Surface.Area
+## MARKOV.THICKNESS.COMBAT/Mean.Thickness
+constant <- 0.452
+loadPhenotype <- function(phenotype_list) {
+  LARGE <- list()
+  for (pheno in phenotype_list) {
+    PRIMARY <- list()
+    PRIMARY$SUBSET <- readRDS(file.path("../../RDS", pheno, "SUBSET.rds"))
+    PRIMARY$FIT.EXTRACT <- readRDS(file.path("../../RDS", pheno, "FIT.EXTRACT.rds"))
+    PRIMARY$MODEL <- readRDS(file.path("../../RDS", pheno, "MODEL.rds"))
+    PRIMARY$BOOT.FIT <- readRDS(file.path("../../RDS", pheno, "BOOT.FIT.rds"))
+    LARGE[[pheno]] <- PRIMARY
+  }
+  names(LARGE) <- sapply(phenotype_list, function(X) { basename(X) })
+  return(LARGE)
+}
+
+phenotype_list <- c("ASEG.VOLUME.COMBAT/BrainSegVolNotVentNoCerebellum", "MARKOV.AREA.COMBAT/Total.Area", "MARKOV.THICKNESS.COMBAT/Mean.Thickness")
+LARGE <- loadPhenotype(phenotype_list)
+```
+
+SCATTERPLOT FUNCTION FINAL
+
+```{r}
+library(ggplot2)
+Scatterplot <- function(LARGE, measure, label, ylab) {
+  PRIMARY <- LARGE[[measure]]
+  if (measure == "BrainSegVolNotVentNoCerebellum") {
+    PRIMARY$SUBSET[[measure]] <- PRIMARY$SUBSET[[measure]] / 1000
+  }
+  scatterplot <- ggplot() +
+    geom_point(data = PRIMARY$SUBSET, aes_string(x = "LogAge", y = measure, color = "Sex"), alpha = 0.5) +
+    scale_colour_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    scale_fill_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    theme_classic() +
+    scale_y_continuous(expand = expansion(mult = c(0.05, .05))) +
+    xlab("") +
+    ggtitle(label) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size=12),
+      axis.text.y = element_text(size=12),
+      legend.text = element_text(size = 18),
+      legend.title = element_text(size = 18)
+    ) +
+    ggeasy::easy_center_title() +
+    guides(color = guide_legend(override.aes = list(size = 4)))
+  
+  
+  ## Add breaks
+  scatterplot <- scatterplot + scale_x_continuous(
+      breaks = c(log((constant)), log((2 / 12) + constant), log((5 / 12) + constant), log((8 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant), log((10) + constant), log((30) + constant)),
+      labels = c("Birth", "2m", "5m", "8m", "1yr", "3yr", "6yr", "10yr", "30yr")
+  )
+  
+  ## Add vline
+  scatterplot <- scatterplot +
+      geom_vline(xintercept = log((constant)), alpha = 0.65, color = "gray", linetype = "dashed") + 
+      geom_vline(xintercept = log((6) + constant), alpha = 0.65, color = "gray", linetype = "dashed")
+  
+  if (measure == "BrainSegVolNotVentNoCerebellum") {
+    scatterplot <- scatterplot +
+      ylab("mL")
+  } else if (measure == "Total.Area") {
+    scatterplot <- scatterplot +
+      ylab("mm²")
+  } else if (measure == "Mean.Thickness") {
+    scatterplot <- scatterplot +
+      ylab("mm")
+  }
+  
+  return(scatterplot)
+}
+```
+
+TESTING SCATTERPLOT
+
+```{r}
+plot <- Scatterplot(LARGE, "BrainSegVolNotVentNoCerebellum", "test", expression(paste("mm²")))
+plot
+```
+
+CURVE FUNCTION FINAL
+
+```{r}
+Plot.Curve.Centiles <- function(LARGE, measure, ylab) {
+  PRIMARY <- LARGE[[measure]]
+  PRIMARY$SUBSET$LogAge <- log(PRIMARY$SUBSET$AgeTransformed)
+  minage <- min(PRIMARY$SUBSET$AgeTransformed)
+  
+  ## Bind fit
+  PRIMARY$CURVE <- Apply.Param(
+    NEWData = rbind(
+      expand.grid(list(AgeTransformed = seq(minage, 35, by = 0.01), Sex = "F")),
+      expand.grid(list(AgeTransformed = seq(minage, 35, by = 0.01), Sex = "M"))
+    ),
+    FITParam = PRIMARY$FIT.EXTRACT$param
+  )
+  PRIMARY$CURVE$LogAge <- log(PRIMARY$CURVE$AgeTransformed)
+  if (measure == "BrainSegVolNotVentNoCerebellum") {
+    PRIMARY$CURVE$PRED.m500.pop <- PRIMARY$CURVE$PRED.m500.pop / 1000
+    PRIMARY$CURVE$PRED.l025.pop <- PRIMARY$CURVE$PRED.l025.pop / 1000
+    PRIMARY$CURVE$PRED.u975.pop <- PRIMARY$CURVE$PRED.u975.pop / 1000
+  }
+  scatterplot <- ggplot() +
+    geom_line(data = PRIMARY$CURVE, aes_string(x ="LogAge", y = "PRED.m500.pop", color = "Sex"), size = 1.5) +
+    geom_line(data = PRIMARY$CURVE, aes_string(x = "LogAge", y = "PRED.l025.pop", color = "Sex"), linetype = "dotted", size = 1, alpha = 0.6) +
+    geom_line(data = PRIMARY$CURVE, aes_string(x = "LogAge", y = "PRED.u975.pop", color = "Sex"), linetype = "dotted", size = 1, alpha = 0.6) +
+    scale_colour_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    scale_fill_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    theme_classic() +
+    scale_y_continuous(expand = expansion(mult = c(0.05, .05))) +
+    xlab("") +
+    theme(legend.position = "none") +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust=1, size=12),
+      axis.text.y = element_text(size=12))
+  
+  ## Add breaks
+  scatterplot <- scatterplot + scale_x_continuous(
+      breaks = c(log((constant)), log((2 / 12) + constant), log((5 / 12) + constant), log((8 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant), log((10) + constant), log((30) + constant)),
+      labels = c("Birth", "2m", "5m", "8m", "1yr", "3yr", "6yr", "10yr", "30yr")) +
+      geom_vline(xintercept = log((constant)), alpha = 0.65, color = "gray", linetype = "dashed") + 
+      geom_vline(xintercept = log((6) + constant), alpha = 0.65, color = "gray", linetype = "dashed")
+  
+  if (measure == "BrainSegVolNotVentNoCerebellum") {
+    scatterplot <- scatterplot +
+      ggtitle("Normative trajectories") +
+      ylab("mL")
+  } else if (measure == "Total.Area") {
+    scatterplot <- scatterplot +
+      ylab("mm²")
+  } else if (measure == "Mean.Thickness") {
+    scatterplot <- scatterplot +
+      ylab("mm")
+  }
+  
+  return(scatterplot)
+}
+```
+
+TESTING
+
+```{r}
+plot <- Plot.Curve.Centiles(LARGE, "BrainSegVolNotVentNoCerebellum", "mL")
+plot
+```
+
+BOOTSTRAPPING PLOT
+
+```{r}
+Bootstrap.Curve <- function(LARGE, measure, ylab) {
+  PRIMARY <- LARGE[[measure]]
+  PRIMARY$BOOT.FIT$LogAge <- log(PRIMARY$BOOT.FIT$AgeTransformed)
+  if (measure == "BrainSegVolNotVentNoCerebellum") {
+    PRIMARY$BOOT.FIT$PRED.m500.pop.lower <- PRIMARY$BOOT.FIT$PRED.m500.pop.lower / 1000
+    PRIMARY$BOOT.FIT$PRED.m500.pop.upper <- PRIMARY$BOOT.FIT$PRED.m500.pop.upper / 1000
+    PRIMARY$BOOT.FIT$PRED.m500.pop <- PRIMARY$BOOT.FIT$PRED.m500.pop / 1000
+  }
+  scatterplot <- ggplot(data=PRIMARY$BOOT.FIT) +
+    scale_colour_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    scale_fill_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    theme_classic() +
+    scale_y_continuous(expand = expansion(mult = c(0.05, .05))) +
+    xlab("") +
+    ylab(ylab) +
+    theme(legend.position = "none") +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size=12),
+      axis.text.y = element_text(size=12),
+      panel.background = element_rect(fill = "transparent"),
+      plot.background = element_rect(fill = "transparent")
+      ) + 
+    scale_x_continuous(
+      breaks = c(log((constant)), log((2 / 12) + constant), log((5 / 12) + constant), log((8 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant), log((10) + constant), log((30) + constant)),
+      labels = c("Birth", "2m", "5m", "8m", "1yr", "3yr", "6yr", "10yr", "30yr")
+    ) +
+    geom_vline(xintercept = log((constant)), alpha = 0.65, color = "gray", linetype = "dashed") + 
+    geom_vline(xintercept = log((6) + constant), alpha = 0.65, color = "gray", linetype = "dashed")
+  
+  scatterplot <- scatterplot +
+    geom_ribbon(aes_string(x = "LogAge", ymin = "PRED.m500.pop.lower", ymax = "PRED.m500.pop.upper", fill = "Sex", alpha=0.2)) +
+    geom_line(aes_string(x = "LogAge", y = "PRED.m500.pop", color = "Sex"), size = 1.5)
+  
+  return(scatterplot)
+}
+```
+
+TESTING
+
+```{r}
+plot <- Bootstrap.Curve(LARGE, "BrainSegVolNotVentNoCerebellum", "mL")
+plot
+```
+
+GROWTH RATE PLOT FINAL
+
+```{r}
+Growth.Rate <- function(LARGE, measure, ylab) {
+  PRIMARY <- LARGE[[measure]]
+  mean_male <- mean(PRIMARY$SUBSET[PRIMARY$SUBSET$Sex == "M", measure])
+  sd_male <- sd(PRIMARY$SUBSET[PRIMARY$SUBSET$Sex == "M", measure])
+  mean_female <- mean(PRIMARY$SUBSET[PRIMARY$SUBSET$Sex == "F", measure])
+  sd_female <- sd(PRIMARY$SUBSET[PRIMARY$SUBSET$Sex == "F", measure])
+  minage <- min(PRIMARY$SUBSET$AgeTransformed)
+  PRIMARY$SUBSET$LogAge <- log(PRIMARY$SUBSET$AgeTransformed)
+  PRIMARY$CURVE <- Apply.Param(
+    NEWData = rbind(
+      expand.grid(list(AgeTransformed = seq(minage, 35, by = 1/365), Sex = "F")),
+      expand.grid(list(AgeTransformed = seq(minage, 35, by = 1/365), Sex = "M"))
+    ),
+    FITParam = PRIMARY$FIT.EXTRACT$param
+  )
+  PRIMARY$HOLDER <- data.frame(
+                      AgeTransformed = PRIMARY$CURVE$AgeTransformed,
+                      LogAge = log(PRIMARY$CURVE$AgeTransformed),
+                      Sex = PRIMARY$CURVE$Sex,
+                      feature = PRIMARY$CURVE$PRED.m500.pop
+                      )
+  PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "F"] <- ((PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "F"] - mean_female) / sd_female)
+  PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "M"] <- ((PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "M"] - mean_male) / sd_male)
+  slopes_female <- c(NA, diff(PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "F"]) / diff(PRIMARY$HOLDER$LogAge[PRIMARY$HOLDER$Sex == "F"]))
+  #slopes_female <- c(NA, diff(PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "F"]))
+  slopes_male <- c(NA, diff(PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "M"]) / diff(PRIMARY$HOLDER$LogAge[PRIMARY$HOLDER$Sex == "M"]))
+  #slopes_male <- c(NA, diff(PRIMARY$HOLDER$feature[PRIMARY$HOLDER$Sex == "M"]))
+  PRIMARY$HOLDER$slopes <- c(slopes_female, slopes_male)
+  female_peak_index <- which.max(PRIMARY$HOLDER$slopes[PRIMARY$HOLDER$Sex == "F"])
+  female_crossing_age <- PRIMARY$HOLDER$AgeTransformed[PRIMARY$HOLDER$Sex == "F"][female_peak_index]
+  plot <- ggplot(PRIMARY$HOLDER, aes(LogAge, slopes, color = Sex)) +
+    geom_point(size = 0.5) +
+    geom_vline(xintercept = log(female_crossing_age)) +
+    geom_vline(xintercept = log((constant)), alpha = 0.65, color = "gray", linetype = "dashed") + 
+    geom_vline(xintercept = log((6) + constant), alpha = 0.65, color = "gray", linetype = "dashed") +
+    geom_hline(yintercept = 0) +
+    scale_x_continuous(
+      breaks = c(log((constant)), log((2 / 12) + constant), log((5 / 12) + constant), log((8 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant), log((10) + constant), log((30) + constant)),
+      labels = c("Birth", "2m", "5m", "8m", "1yr", "3yr", "6yr", "10yr", "30yr")) +
+    scale_colour_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) + 
+    scale_fill_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+    theme_classic() +
+    xlab("") +
+    theme(legend.position = "none") +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust=1, size=12),
+      axis.text.y = element_text(size=12)
+      )
+  
+  if (measure == "BrainSegVolNotVentNoCerebellum") {
+    plot <- plot +
+      ggtitle("Growth rate per day") +
+      ylab("mm³ per day")
+  } else if (measure == "Total.Area") {
+    plot <- plot +
+      ylab("mm² per day")
+  } else if (measure == "Mean.Thickness") {
+    plot <- plot +
+      ylab("mm per day")
+  }
+  
+  return(plot)
+}
+```
+
+TESTING GROWTH RATE
+
+```{r}
+plot <- Growth.Rate(LARGE, "BrainSegVolNotVentNoCerebellum", "mm per day")
+plot
+```
+
+FINAL GROWTH RATE FUNCTIONS
+
+```{r}
+library(dplyr)
+loadTotalGrayVolPeak <- function() {
+  ## Returns AgeTransformed value at Peak (so Age + constant (for dealing with negative values))
+  R <- list()
+  P <- readRDS("../../RDS/ASEG.VOLUME.COMBAT/TotalGrayVol/peak_CI.rds")
+  R[["M"]] <- P["Male_Peak"]
+  R[["F"]] <- P["Female_Peak"]
+  return(R)
+}
+
+loadGrowthRates <- function(source) {
+  source("../../301.functions.r")
+  ## Load the BOOT.FITS based on order of markov_order.json 
+  ## Source determines the dir (ASEG.VOL, MARKOV.AREA, etc...)
+  markovOrder <- fromJSON("../../Data/ParcellationMappings/markov_order.json")
+  FIT.LIST <- list()
+  ## First fit new curve data for each markov region, by 1/365 per point (each day)
+  for (NUM in 1:length(markovOrder)) {
+    print(file.path("../../RDS", source, names(markovOrder[NUM]), "FIT.EXTRACT.rds"))
+    FIT.EXTRACT <- readRDS(file.path("../../RDS", source, names(markovOrder[NUM]), "FIT.EXTRACT.rds"))
+    FIT.LIST[[names(markovOrder)[NUM]]] <- Apply.Param(
+      NEWData = rbind(
+          expand.grid(list(AgeTransformed = seq(0.452, 35, by = (1/365)), Sex = "F")),
+          expand.grid(list(AgeTransformed = seq(0.452, 35, by = (1/365)), Sex = "M"))
+        ),
+      FITParam = FIT.EXTRACT$param
+    )
+  }
+  ## Now calculate growth rates of each PRED.m500.pop
+  FIT.LIST <- lapply(FIT.LIST, function(X) {
+    X <- X %>%
+      mutate(LogAge = log(AgeTransformed)) %>%
+      mutate(AgeTransformed = round(AgeTransformed, 3)) %>%
+      group_by(Sex) %>%
+      mutate(PRED.m500.pop.normalized = (PRED.m500.pop - mean(PRED.m500.pop)) / sd(PRED.m500.pop)) %>%
+      mutate(PRED.m500.pop.normalized.slope = c(diff(PRED.m500.pop) / diff(AgeTransformed), NA))
+  })
+  TGVP <- loadTotalGrayVolPeak()
+  SLOPES.LIST <- list()
+  SLOPES.LIST <- lapply(FIT.LIST, function(X) {
+    M <- X %>%
+      filter(Sex == "M" & (round(AgeTransformed, 3) %in% (TGVP[["M"]] - 0.001))) %>%
+      .$PRED.m500.pop.normalized.slope
+    F <- X %>%
+      filter(Sex == "F" & (round(AgeTransformed, 3) %in% (TGVP[["F"]] - 0.001))) %>%
+      .$PRED.m500.pop.normalized.slope
+    return(list(M = M, F = F))
+  })
+  return(SLOPES.LIST)
+}
+
+Visualize.Surface <- function(lh_data, rh_data, species, parcellation, save_location, color_map, color_range_min, color_range_max) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release")
+  write.table(lh_data, "Plotting/temp_lh_data.csv", col.names = FALSE, row.names = FALSE)
+  write.table(rh_data, "Plotting/temp_rh_data.csv", col.names = FALSE, row.names = FALSE)
+  system(paste("python3", "Plotting/Surface.Plotting.py", parcellation, species, save_location, color_map, color_range_min, color_range_max, "Plotting/temp_lh_data.csv", "Plotting/temp_rh_data.csv", sep = " "))
+}
+
+createVisualization <- function(source, measure, color_map, color_range_min, color_range_max) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Plotting/Final")
+  SLOPES.LIST <- loadGrowthRates(source)
+  MVal <- c(0, sapply(SLOPES.LIST, function(X) {X$M}))
+  FVal <- c(0, sapply(SLOPES.LIST, function(X) {X$F}))
+  savePath <- file.path("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Plotting/Final/Figure2Images", paste(measure, "growth", sep="_"))
+  MSP <- paste(savePath, "M.png", sep="_")
+  FSP <- paste(savePath, "F.png", sep="_")
+  Visualize.Surface(MVal, MVal, "monkey", "markov", MSP, color_map, color_range_min, color_range_max)
+  Visualize.Surface(FVal, FVal, "monkey", "markov", FSP, color_map, color_range_min, color_range_max)
+}
+```
+
+SAVE THE VISUALIZATION PLOTS
+Notes:
+-> Normalization necessary? If calculating growth per day in real units, (mm^3, mm^2, etc) should we normalize?
+
+```{r}
+createVisualization("MARKOV.VOLUME.COMBAT", "Volume", "coolwarm", -100, 100)
+createVisualization("MARKOV.AREA.COMBAT", "Total.Area", "coolwarm", -30, 30)
+createVisualization("MARKOV.THICKNESS.COMBAT", "Mean.Thickness", "coolwarm", -0.5, 0.5)
+```
+
+PUT FIGURES TOGETHER AND SAVE WITH PATCHWORK
+
+```{r}
+library(patchwork)
+library(png)
+library(ggplot2)
+
+colnames <- c("Cerebrum Volume", "Surface Area", "Cortical Thickness")
+plots <- list()
+for (i in 1:3) {
+  for (j in 1:3) {
+    if (j == 1) {
+      plots[[i + 3 * (j - 1)]] <- Scatterplot(LARGE, names(LARGE)[i], colnames[i], "mm")
+    } else if (j == 2) {
+      plots[[i + 3 * (j - 1)]] <- Plot.Curve.Centiles(LARGE, names(LARGE)[i], "mm")
+    } else if (j == 3) {
+      plots[[i + 3 * (j - 1)]] <- Growth.Rate(LARGE, names(LARGE)[i], "growth per day")
+    }
+  }
+}
+
+trajectory_plots <- wrap_plots(
+    grobs = plots,
+    ncol = 3,
+    nrow = 3,
+    widths = rep(1, 3),
+    heights = rep(1, 3),
+    align = "v"
+  ) +
+  plot_layout(
+    guides = "collect",
+  )
+
+ggsave("Figure2.pdf", trajectory_plots, width = 16, height = 7, dpi=500)
+```
+
+

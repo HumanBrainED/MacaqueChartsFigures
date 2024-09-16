@@ -1,0 +1,582 @@
+This file is for creating some supplementary plots of the trajectories, specifically:
+  Clustering
+  3D visualization with clusters
+  
+```{r}
+## Load the data in first
+library(jsonlite)
+library(dplyr)
+loadTrajectoriesMonkey <- function() {
+  source("../../301.functions.r")
+  phenotypes <- c("MARKOV.VOLUME.COMBAT", "MARKOV.AREA.COMBAT", "MARKOV.THICKNESS.COMBAT")
+  phenotype_names <- c("Volume", "Area", "Thickness")
+  markovOrder <- fromJSON("../../data_v2.0/demographics/markov_order.json")
+  LARGE <- list()
+  for (IDX in 1:length(phenotypes)) {
+    ## For each measure
+    FIT.LIST <- list()
+    for (NUM in 1:length(markovOrder)) {
+      FIT.EXTRACT <- readRDS(file.path("../../RDS", phenotypes[IDX], names(markovOrder[NUM]), "FIT.EXTRACT.rds"))
+      FIT.LIST[[names(markovOrder)[NUM]]] <- Apply.Param(
+      NEWData = rbind(
+          expand.grid(list(FakeAge = seq(0.452, 35, by = 0.01), Sex = "F")),
+          expand.grid(list(FakeAge = seq(0.452, 35, by = 0.01), Sex = "M"))
+        ),
+      FITParam = FIT.EXTRACT$param
+      )
+      ## Add proportional scaling
+      FIT.LIST[[names(markovOrder)[NUM]]] <- FIT.LIST[[names(markovOrder)[NUM]]] %>%
+        group_by(Sex) %>%
+        mutate(LogAge = log(FakeAge)) %>%
+        mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop)) %>%
+        mutate(metric = names(markovOrder)[NUM]) %>%
+        ungroup()
+    }
+    ## Now bind all the fits into one dataframe
+    LARGE[[phenotype_names[IDX]]] <- Reduce(bind_rows, FIT.LIST)
+  }
+  return(LARGE)
+}
+
+loadTrajectoriesHuman <- function() {
+  aparcOrder <- fromJSON("../../data_v2.0/demographics/aparc_order.json")
+  phenotypes <- c("Volume")
+  LARGE <- list()
+  for (IDX in 1:length(phenotypes)) {
+    FIT.LIST <- list()
+    for (NUM in 1:length(aparcOrder)) {
+      if (!file.exists(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))) {
+        next
+      }
+      print(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))
+      FIT.EXTRACT <- readRDS(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))
+      FIT.LIST[[names(aparcOrder)[NUM]]] <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(log(365),log(365*95),length.out=2^10), sex = "Female")),
+        expand.grid(list(AgeTransformed = seq(log(365),log(365*95),length.out=2^10), sex = "Male"))
+        ),
+        FITParam = FIT.EXTRACT$param
+      )
+      FIT.LIST[[names(aparcOrder)[NUM]]] <- FIT.LIST[[names(aparcOrder)[NUM]]] %>%
+        group_by(sex) %>%
+        mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop)) %>%
+        mutate(metric = names(aparcOrder)[NUM])
+    }
+    LARGE[[phenotypes[IDX]]] <- Reduce(bind_rows, FIT.LIST)
+  }
+  return(LARGE)
+}
+
+loadSubcorticalTrajectoriesMonkey <- function() {
+  source("../../301.functions.r")
+  subcorticalList <- list()
+  subcorticalList[["Trajectories"]] <- list()
+  subcorticalList[["RawData"]] <- list()
+  metric_names <- as.vector(read.csv("../../RDS/ASEG.VOLUME.COMBAT/METRIC.NAMES.txt", header=FALSE))[[1]]
+  for (NUM in 1:length(metric_names)) {
+    basePath <- file.path("../../RDS/ASEG.VOLUME.COMBAT", metric_names[NUM])
+    if (!file.exists(file.path(basePath, "FIT.EXTRACT.rds"))) {
+      next
+    }
+    FIT.EXTRACT <- readRDS(file.path(basePath, "FIT.EXTRACT.rds"))
+    SUBSET <- readRDS(file.path(basePath, "SUBSET.rds"))
+    subcorticalList[["Trajectories"]][[metric_names[NUM]]] <- Apply.Param(
+      NEWData = rbind(
+          expand.grid(list(FakeAge = seq(0.1705, 35, by = 0.01), Sex = "F")),
+          expand.grid(list(FakeAge = seq(0.1705, 35, by = 0.01), Sex = "M"))
+        ),
+      FITParam = FIT.EXTRACT$param
+    )
+    subcorticalList[["RawData"]][[metric_names[NUM]]] <- SUBSET
+    subcorticalList[["Trajectories"]][[metric_names[NUM]]] <- subcorticalList[["Trajectories"]][[metric_names[NUM]]] %>%
+      group_by(Sex) %>%
+      mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop)) %>%
+      mutate(LogAge = log(FakeAge)) %>%
+      mutate(metric = metric_names[NUM])
+  }
+  return(subcorticalList)
+}
+
+#LARGE <- loadTrajectoriesMonkey()
+SUBCORTICAL.LARGE.MACAQUE <- loadSubcorticalTrajectoriesMonkey()
+#LARGE.HUMAN <- loadTrajectoriesHuman()
+```
+
+```{r}
+## Now should be able to visualize all the trajectories on one plot
+library(ggplot2)
+ggplot(data=subset(LARGE.HUMAN[["Volume"]], sex == "Male"), aes(x=AgeTransformed, y=PRED.mean.pop.prop, color=metric)) +
+  geom_line() +
+  theme(
+    legend.position = "none"
+  )
+```
+
+```{r}
+## Cool, now we want to cluster these trajectories
+library(factoextra)
+library(tidyr)
+## Reorganize data to make sense with the time-series data
+data <- LARGE[["Volume"]] %>%
+  filter(Sex == "M") %>%
+  group_by(metric) %>%
+  select(PRED.mean.pop.prop, LogAge) %>%
+  pivot_wider(names_from = metric, values_from = PRED.mean.pop.prop) %>%
+  t() %>%  
+  as.data.frame() %>% 
+  `colnames<-`(.[1, ]) %>%
+  .[-1, ]
+
+data.human <- LARGE.HUMAN[["Volume"]] %>%
+  filter(sex == "Male") %>%
+  group_by(metric) %>%
+  select(PRED.mean.pop.prop, AgeTransformed) %>%
+  pivot_wider(names_from = metric, values_from = PRED.mean.pop.prop) %>%
+  t() %>%
+  as.data.frame() %>%
+  `colnames<-`(.[1, ]) %>%
+  .[-1, ]
+
+## Now can run clustering analysis
+data <- as.data.frame(data)
+data.human <- as.data.frame(data.human)
+fviz_nbclust(data, kmeans, method = "wss") +
+  theme_minimal()
+```
+```{r}
+## Run the actual clustering
+optimal_k <- 4
+kmeans_result <- kmeans(data, centers = optimal_k)
+kmeans_result_human <- kmeans(data.human, centers = optimal_k)
+cluster_assignments <- kmeans_result$cluster
+cluster_assignments_human <- kmeans_result_human$cluster
+```
+
+```{r}
+## Macaque
+clusters <- as.data.frame(cluster_assignments)
+clusters <- clusters %>%
+  mutate(metric = row.names(.)) %>%
+  arrange(cluster_assignments)
+
+clusters$metric <- reorder(clusters$metric, clusters$cluster_assignments)
+  
+ggplot(data=clusters, aes(x=metric, y=cluster_assignments, color=as.factor(cluster_assignments))) +
+  geom_point() +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    legend.position = "none"
+  )
+```
+
+```{r}
+## Human
+clusters_human <- as.data.frame(cluster_assignments_human)
+clusters_human <- clusters_human %>%
+  mutate(metric = row.names(.)) %>%
+  arrange(cluster_assignments_human)
+
+clusters_human$metric <- reorder(clusters_human$metric, clusters_human$cluster_assignments_human)
+  
+ggplot(data=clusters_human, aes(x=metric, y=cluster_assignments_human, color=as.factor(cluster_assignments_human))) +
+  geom_point() +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    legend.position = "none"
+  )
+```
+
+
+```{r}
+library(ggsci)
+## Merge back with original dataframe and color based on cluster (Macaque)
+plotting_clusters <- merge(subset(LARGE[["Volume"]], Sex == "M"), clusters, by="metric")
+plot <- ggplot(plotting_clusters, aes(x=LogAge, y=PRED.mean.pop.prop, color=as.factor(cluster_assignments), group=metric)) +
+  geom_line(alpha = 0.7) +
+  theme_classic() +
+  labs(
+    color = "Cluster",
+    x = "",
+    y = "Prop. of Max value"
+  ) +
+  scale_color_npg() +
+  scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr")
+    ) +
+  geom_vline(xintercept = log((constant)), alpha = 0.65, color = "gray", linetype = "dashed") + 
+  geom_vline(xintercept = log((6) + constant), alpha = 0.65, color = "gray", linetype = "dashed")
+
+ggsave(plot=plot, file.path("SupplementaryTrajectories/VolumeCluster2DTrajectories.png"), width=10, height=3, dpi=300)
+plot
+```
+```{r}
+library(ggsci)
+## Merge back with original dataframe and color based on cluster (Human)
+plotting_clusters_human <- merge(subset(LARGE.HUMAN[["Volume"]], sex == "Male"), clusters_human, by="metric")
+plot <- ggplot(plotting_clusters_human, aes(x=AgeTransformed, y=PRED.mean.pop.prop, color=as.factor(cluster_assignments_human), group=metric)) +
+  geom_line(alpha = 0.7) +
+  theme_classic() +
+  labs(
+    color = "Cluster",
+    x = "",
+    y = "Prop. of Max value"
+  ) +
+  scale_color_npg() +
+  scale_x_continuous(
+      breaks=c(log(270), log(635), log(1365), log(2460), log(4650), log(6840), log(14870), log(22170)),
+      labels=c("Birth", "1yr", "3yr", "6yr", "12yr", "18yr", "40yr", "60yr")
+    ) 
+
+ggsave(plot=plot, file.path("SupplementaryTrajectories/VolumeCluster2DTrajectoriesHuman.png"), width=10, height=3, dpi=300)
+plot
+```
+
+
+```{r}
+## Same plot but facet wrap
+plot <- ggplot(plotting_clusters, aes(x = LogAge, y = PRED.mean.pop.prop, color = as.factor(cluster_assignments), group = metric)) +
+  geom_line() +
+  facet_wrap(~cluster_assignments, scales = "free_y", ncol = 5) +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+   scale_color_npg() +
+  scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr")
+    ) +
+  geom_vline(xintercept = log((constant)), alpha = 0.65, color = "gray", linetype = "dashed") + 
+  geom_vline(xintercept = log((6) + constant), alpha = 0.65, color = "gray", linetype = "dashed")
+
+ggsave(plot=plot, file.path("SupplementaryTrajectories/VolumeCluster2DTrajectoriesFacet.png"), width=16, height=4, dpi=300)
+plot
+```
+```{r}
+## Facet plot (human)
+plot <- ggplot(plotting_clusters_human, aes(x = AgeTransformed, y = PRED.mean.pop.prop, color = as.factor(cluster_assignments_human), group = metric)) +
+  geom_line() +
+  facet_wrap(~cluster_assignments_human, scales = "free_y", ncol = 5) +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+   scale_color_npg() +
+  scale_x_continuous(
+      breaks=c(log(270), log(635), log(1365), log(2460), log(4650), log(6840), log(14870), log(22170)),
+      labels=c("Birth", "1yr", "3yr", "6yr", "12yr", "18yr", "40yr", "60yr")
+    ) 
+
+ggsave(plot=plot, file.path("SupplementaryTrajectories/VolumeCluster2DTrajectoriesFacetHuman.png"), width=16, height=4, dpi=300)
+plot
+```
+
+```{r}
+## Plot it on the surface
+## Macaque
+markovOrder <- as.data.frame(fromJSON("../../data_v2.0/demographics/markov_order.json"))
+markovOrder <- as.data.frame(t(markovOrder))
+markovOrder$metric <- row.names(markovOrder)
+colnames(markovOrder) <- c("markovOrder", "metric")
+
+surfaceData <- merge(markovOrder, distinct(plotting_clusters[, c("cluster_assignments", "metric")]), by="metric")
+surfaceData <- surfaceData %>%
+  arrange(markovOrder)
+surfaceValues <- c(0, surfaceData$cluster_assignments)
+
+## Human
+aparcOrder <- as.data.frame(fromJSON("../../data_v2.0/demographics/aparc_order.json"))
+aparcOrder <- as.data.frame(t(aparcOrder))
+aparcOrder$metric <- row.names(aparcOrder)
+colnames(aparcOrder) <- c("aparcOrder", "metric")
+
+surfaceDataHum <- merge(aparcOrder, distinct(plotting_clusters_human[, c("cluster_assignments_human", "metric")]), by="metric")
+surfaceDataHum <- surfaceDataHum %>%
+  arrange(aparcOrder)
+surfaceValuesHum <- c(0, surfaceDataHum$cluster_assignments_human)
+surfaceValuesHum <- c(0, surfaceValuesHum[1:3], 0, surfaceValuesHum[4:length(surfaceValuesHum)])
+
+Visualize.Surface <- function(lh_data, rh_data, species, parcellation, save_location, color_map, color_range_min, color_range_max) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan")
+  write.table(lh_data, "Plotting/temp_lh_data.csv", col.names = FALSE, row.names = FALSE)
+  write.table(rh_data, "Plotting/temp_rh_data.csv", col.names = FALSE, row.names = FALSE)
+  system(paste("python3", "Plotting/Surface.Plotting.py", parcellation, species, save_location, color_map, color_range_min, color_range_max, "Plotting/temp_lh_data.csv", "Plotting/temp_rh_data.csv", sep = " "), wait=TRUE)
+}
+
+Visualize.Surface(surfaceValues, 
+                  surfaceValues, 
+                  "monkey", 
+                  "markov", 
+                  file.path("Plotting/Final/SupplementaryTrajectories/VolumeSurfClusters.png"),
+                  "tab10",
+                  0,
+                  optimal_k
+                  )
+Visualize.Surface(surfaceValuesHum,
+                  surfaceValuesHum,
+                  "human",
+                  "aparc",
+                  file.path("Plotting/Final/SupplementaryTrajectories/VolumeSurfClustersHuman.png"),
+                  "tab10",
+                  0,
+                  optimal_k
+                  )
+```
+
+```{r}
+## Plot the clusters in 3 dimensional space
+library(dplyr)
+library(plotly)
+library(orca)
+
+plotting_clusters$metric <- factor(
+  plotting_clusters$metric,
+  levels = unique(plotting_clusters$metric)[order(plotting_clusters$cluster_assignments, decreasing = TRUE)]
+)
+
+# Create a 3D scatter plot with plotly
+plot <- plot_ly(
+  data = plotting_clusters,
+  x = ~LogAge,
+  z = ~PRED.mean.pop.prop,
+  y = ~as.factor(metric),
+  color = ~as.factor(cluster_assignments),
+  type = "scatter3d",
+  mode = "markers",
+  marker = list(size = 3)
+) %>%
+  layout(scene = list(yaxis = list(showticklabels = FALSE)))
+
+plot
+```
+ 
+```{r}
+## Matrix plot
+# Assuming 'plotting_clusters' is your dataframe with required columns
+library(ggplot2)
+library(RColorBrewer)
+
+# Order the levels of cluster_assignments
+plotting_clusters$cluster_assignments <- factor(
+  plotting_clusters$cluster_assignments,
+  levels = sort(unique(plotting_clusters$cluster_assignments))
+)
+
+# Order the factor levels of metric based on cluster_assignments
+plotting_clusters$metric <- factor(
+  plotting_clusters$metric,
+  levels = unique(plotting_clusters$metric[order(plotting_clusters$cluster_assignments)])
+)
+
+# Create a matrix plot using ggplot2 with blue to red color scale
+plot <- ggplot(plotting_clusters, aes(x = FakeAge, y = metric, fill = PRED.mean.pop.prop)) +
+  geom_tile(alpha = 1) +
+  labs(x = "Age", y = "Region", fill = "Prop. of Max Value") +
+  theme_classic() +
+  scale_fill_viridis_c(option = "plasma", alpha = 1) +
+  theme(
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+ggsave(plot=plot, file.path("SupplementaryTrajectories/VolumeClusterMatrixTrajectories.png"), width=4, height=6, dpi=300)
+plot
+```
+```{r}
+## Same plot but zscore instead
+plotting_clusters <- plotting_clusters %>%
+  group_by(metric) %>%
+  mutate(PRED.mean.pop.prop.zscore = scale(PRED.mean.pop.prop))
+
+plotting_clusters$cluster_assignments <- factor(
+  plotting_clusters$cluster_assignments,
+  levels = sort(unique(plotting_clusters$cluster_assignments))
+)
+
+# Order the factor levels of metric based on cluster_assignments
+plotting_clusters$metric <- factor(
+  plotting_clusters$metric,
+  levels = unique(plotting_clusters$metric[order(plotting_clusters$cluster_assignments)])
+)
+
+plot <- ggplot(plotting_clusters, aes(x = FakeAge, y = metric, fill = PRED.mean.pop.prop.zscore)) +
+  geom_tile(alpha = 1) +
+  labs(x = "Age", y = "Region", fill = "Z-Score Prop. Max Value") +
+  theme_classic() +
+  scale_fill_viridis_c(option = "plasma", alpha = 1, limits = c(-2, 2), oob = scales::squish) +
+  theme(
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+ggsave(plot=plot, file.path("SupplementaryTrajectories/VolumeClusterMatrixTrajectoriesZscore.png"), width=4, height=6, dpi=300)
+plot
+```
+Want to try matching the age ranges of both human and macaque for global phenotypes
+
+```{r}
+crossSpeciesTrajectories <- readRDS("Figure4Data/crossSpeciesCurveFits.rds")
+matchLifespanPlot <- function(LARGE, type, macaqueAge=25, humanAge=80) {
+  macaque <- LARGE$Macaque %>%
+    filter(metric == type, Sex == "M", FakeAge < (macaqueAge + 0.452)) %>%
+    mutate(Species = "Macaque") %>%
+    mutate(AgeProp = (FakeAge - 0.452) / macaqueAge) %>%
+    mutate(LogAgeProp = log(AgeProp+0.02)) 
+  human <- LARGE$Human %>%
+    filter(metric == type, sex == "Male", Age < ((humanAge*365) - 365)) %>%
+    mutate(Species = "Human") %>%
+    mutate(FakeAge = Age) %>%
+    mutate(AgeProp = (Age - 365) / (humanAge*365)) %>%
+    mutate(LogAgeProp = log(AgeProp+0.02))
+  
+  macaquePeaks <- LARGE$MacaquePeaks %>%
+    filter(metric == type) %>%
+    mutate(AgePropPeak = (curvePeakAgeNonTransformed/macaqueAge)) %>%
+    mutate(GrowthPropPeak = (growthPeakAgeNonTransformed/macaqueAge)) %>%
+    mutate(LogAgePropPeak = ifelse(log(AgePropPeak+0.02) > log(1), log(1), log(AgePropPeak+0.02))) %>%
+    mutate(LogGrowthPropPeak = log(GrowthPropPeak+0.02)) %>%
+    mutate(Species = "Macaque")
+  humanPeaks <- LARGE$HumanPeaks %>%
+    filter(metric == type) %>%
+    mutate(AgePropPeak = (curvePeakAgeNonTransformed/(365*humanAge))) %>%
+    mutate(GrowthPropPeak = (growthPeakAgeNonTransformed/(365*humanAge))) %>%
+    mutate(LogAgePropPeak = log(AgePropPeak+0.02)) %>%
+    mutate(LogGrowthPropPeak = log(GrowthPropPeak+0.02)) %>%
+    mutate(Species = "Human")
+  
+  plotting_data <- rbind(
+    macaque[, c("Species", "FakeAge", "AgeProp", "LogAgeProp", "PRED.mean.pop.prop")],
+    human[, c("Species", "FakeAge", "AgeProp", "LogAgeProp", "PRED.mean.pop.prop")]
+  )
+  plotting_peaks <- rbind(
+    macaquePeaks[, c("LogAgePropPeak", "Species", "curvePeak", "LogGrowthPropPeak", "growthPeak")],
+    humanPeaks[, c("LogAgePropPeak", "Species", "curvePeak", "LogGrowthPropPeak", "growthPeak")]
+  )
+  
+  plot <- ggplot(plotting_data, aes(x=LogAgeProp, y=PRED.mean.pop.prop, color=Species)) +
+    geom_line(size=1.5) +
+    geom_point(data=plotting_peaks, aes(x=LogAgePropPeak, y=curvePeak), size=5) +
+    geom_point(data=plotting_peaks, aes(x=LogGrowthPropPeak, y=growthPeak), shape=17, size=5) +
+    theme_classic() +
+    xlab("") +
+    ylab("Prop. of Max Value") +
+    scale_color_jco() +
+    scale_x_continuous(
+      breaks=c(log(0+0.02), log(0.013+0.02), log(0.135+0.02), log(0.23+0.02), log(0.5+0.02), log(0.85+0.02)),
+      labels=c("Birth", "Infancy", "Childhood", "Adolescence", "Mid-life", "Elder")
+    ) +
+    geom_vline(xintercept = log(0+0.02), alpha=0.7, color="gray", linetype="dashed") +
+    geom_vline(xintercept = log(0.013+0.02), alpha=0.7, color="gray", linetype="dashed") +
+    geom_vline(xintercept = log(0.135+0.02), alpha=0.7, color="gray", linetype="dashed") +
+    geom_vline(xintercept = log(0.23+0.02), alpha=0.7, color="gray", linetype="dashed") +
+    geom_vline(xintercept = log(0.5+0.02), alpha=0.7, color="gray", linetype="dashed") +
+    geom_vline(xintercept = log(0.85+0.02), alpha=0.7, color="gray", linetype="dashed") +
+    scale_color_manual(values=c(
+      "Human" = "#E3170A",
+      "Macaque" = "#247BA0"
+      )) +
+    ggtitle(type) +
+    ggeasy::easy_center_title() +
+    scale_y_continuous(
+      expand = expansion(add = c(0, 0.1))
+    ) +
+    #ylim(c(0, 1.1)) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 11),
+      plot.title = element_text(size = 16, face = "bold")
+    )
+  
+  return(plot)
+} 
+
+GMV <- matchLifespanPlot(crossSpeciesTrajectories, "Gray Matter Volume")
+WMV <- matchLifespanPlot(crossSpeciesTrajectories, "White Matter Volume")
+sGMV <- matchLifespanPlot(crossSpeciesTrajectories, "Subcortical Gray Volume")
+MCT <- matchLifespanPlot(crossSpeciesTrajectories, "Cortical Thickness")
+SA <- matchLifespanPlot(crossSpeciesTrajectories, "Surface Area")
+CV <- matchLifespanPlot(crossSpeciesTrajectories, "Cerebrum Volume")
+plot <- GMV + SA + MCT +
+  plot_layout(
+    axis_titles = "collect",
+    guides = "collect"
+  )
+ggsave(plot=plot, file.path("SupplementaryTrajectories/MatchedLifespanPlot.png"), width=16, height=4, dpi=300)
+plot
+```
+
+```{r}
+## Make subcortical matrix plot
+subcorticalMatrix <- function(LARGE, dataType) {
+  library(patchwork)
+  constant <- 0.452
+  df <- LARGE[[dataType]]
+  metrics <- names(df)
+  plot_list <- list()
+  for (NUM in 1:length(metrics)) {
+    if (metrics[NUM] == "CSF") {
+      next
+    }
+    plotting_df <- df[[metrics[NUM]]]
+    if (dataType == "RawData") {
+      y_axis <- metrics[NUM]
+      p <- ggplot(data=plotting_df, aes_string(x="LogAge", y=y_axis, color="Sex")) +
+        geom_point(size=1.5, alpha=0.4) +
+        ylab("") +
+        xlab("") +
+        ggtitle(metrics[NUM]) +
+        scale_color_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+        scale_x_continuous(
+          breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant), log((10) + constant), log((30) + constant)),
+          labels = c("Birth", "4m", "1yr", "3yr", "6yr", "10yr", "30yr")
+        ) +
+        theme_minimal() +
+        theme(
+          axis.text.x = element_text(angle=45, hjust=1, size=6),
+          axis.text.y = element_text(size=7),
+          plot.title = element_text(size=8)
+        ) +
+        ggeasy::easy_center_title()
+    
+      plot_list[[metrics[NUM]]] <- p
+    } else if (dataType == "Trajectories") {
+      p <- ggplot() +
+        geom_line(data=plotting_df, aes(x=LogAge, y=PRED.mean.pop, color=Sex), size=1.5) +
+        geom_line(data=plotting_df, aes(x=LogAge, y=PRED.l025.pop, color=Sex), size=1, linetype="dotted", alpha=0.6) +
+        geom_line(data=plotting_df, aes(x=LogAge, y=PRED.u975.pop, color=Sex), size=1, linetype="dotted", alpha=0.6) +
+        ylab("") +
+        xlab("") +
+        ggtitle(metrics[NUM]) +
+        scale_color_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+        scale_x_continuous(
+          breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant), log((10) + constant), log((30) + constant)),
+          labels = c("Birth", "4m", "1yr", "3yr", "6yr", "10yr", "30yr")
+        ) +
+        theme_minimal() +
+        theme(
+          axis.text.x = element_text(angle=45, hjust=1, size=6),
+          axis.text.y = element_text(size=7),
+          plot.title = element_text(size=8)
+        ) +
+        ggeasy::easy_center_title()
+      plot_list[[metrics[NUM]]] <- p
+    }
+  }
+  return(plot_list)
+}
+
+plot <- subcorticalMatrix(SUBCORTICAL.LARGE.MACAQUE, "Trajectories")
+final_plot <- wrap_plots(plot, ncol=4) +
+  plot_layout(
+    guides = "collect",
+    axis_titles = "collect"
+  )
+
+ggsave(plot=final_plot, file.path("SupplementaryTrajectories/SubcorticalMatrixTrajectories.png"), width=8, height=12, dpi=400)
+final_plot
+```
+

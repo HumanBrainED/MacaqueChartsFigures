@@ -1,0 +1,69 @@
+## File for saving the bootstrapping confidence intervals for global phenotypes
+
+```{r}
+## Load the data
+loadData <- function() {
+  phenotypes <- c(
+    "ASEG.VOLUME.COMBAT/TotalGrayVol",
+    "ASEG.VOLUME.COMBAT/CorticalWhiteMatterVol",
+    "ASEG.VOLUME.COMBAT/SubCortGrayVol",
+    "ASEG.VOLUME.COMBAT/Total.Lateral.Ventricle"
+  )
+  phenotype_names <- c(
+    "GMV",
+    "WMV",
+    "sGMV",
+    "Ventricle"
+  )
+  BOOT.LIST <- list()
+  for (NUM in 1:length(phenotypes)) {
+    path <- file.path("../../RDS", phenotypes[NUM], "BOOT.FIT.rds")
+    BOOT.EXTRACT <- readRDS(path)
+    BOOT.EXTRACT$LogAge <- log(BOOT.EXTRACT$AgeTransformed)
+    BOOT.LIST[[phenotype_names[NUM]]] <- BOOT.EXTRACT
+  }
+  return(BOOT.LIST)
+}
+
+BOOT.LIST <- loadData()
+```
+
+```{r}
+## Make patchwork
+library(ggplot2)
+library(patchwork)
+plottingBootstrap <- function(BOOT.LIST) {
+  constant <- 0.452
+  plotList <- list()
+  for (NUM in 1:length(BOOT.LIST)) {
+    p <- ggplot() +
+      geom_line(data=BOOT.LIST[[NUM]], aes(x=LogAge, y=PRED.mean.pop, color=Sex), size=1) +
+      geom_ribbon(data=BOOT.LIST[[NUM]], aes(x=LogAge, ymin = PRED.mean.pop.lower, ymax = PRED.mean.pop.upper, fill = Sex), alpha = 0.5) +
+      ggtitle(names(BOOT.LIST)[NUM]) +
+      theme_classic() +
+      ylab(bquote("Volume (mm"^3*")")) +
+      xlab("") +
+      scale_x_continuous(
+        breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+        labels = c("Birth", "4m", "1yr","3yr", "6yr", "15yr", "25yr")
+      ) +
+      scale_color_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+      scale_fill_manual(values = c("M" = "#247BA0", "F" = "#E3170A")) +
+      ggeasy::easy_center_title() +
+      theme(
+        plot.title = element_text(size=10),
+        axis.text.x = element_text(angle=45, hjust=1)
+      )
+      
+    plotList[[NUM]] <- p
+  }
+  return(plotList)
+}
+
+plotList <- plottingBootstrap(BOOT.LIST)
+patchwork <- wrap_plots(plotList, ncol=2) +
+  plot_layout(guides = "collect", axis_titles = "collect")
+ggsave(plot=patchwork, file.path("SupplementaryBootstrappingImages/GlobalPhenotypes.pdf"), width=6, height=4)
+ggsave(plot=patchwork, file.path("SupplementaryBootstrappingImages/GlobalPhenotypes.png"), width=6, height=4)
+```
+

@@ -1,0 +1,275 @@
+```{r}
+CombatDf <- readRDS("../../RDS/ASEG.VOLUME.COMBAT/TotalGrayVol/SUBSET.rds")
+CombatDf <- CombatDf %>%
+  filter(Age > 0)
+CombatDf <- CombatDf %>%
+    mutate(Pipeline = ifelse((Site == "site-neurodev" | Site == "site-NKIdev") & Age < 0.33, 2, 1))
+CombatDf$Pipeline <- factor(CombatDf$Pipeline, levels = c("1", "2"), labels = c("Default", "Modified"))
+CombatDf <- subset(CombatDf, !(Pipeline == "Standard" & Age < 0.33))
+p <- ggplot(data=CombatDf, aes(x=LogAge, fill=Pipeline)) +
+  geom_histogram(binwidth = 0.1) +
+  xlab("log(Age)") +
+  scale_fill_npg() +
+  theme_bw() +
+  scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr")
+    ) 
+p
+ggsave(plot=p, file.path("SupplementaryCombatImages/PipelineDistribution.png"), width=6, height=3)
+ggsave(plot=p, file.path("SupplementaryCombatImages/PipelineDistribution.pdf"), width=6, height=3)
+```
+
+```{r}
+SUBSET <- readRDS("../../RDS/ASEG.VOLUME/TotalGrayVol/SUBSET.rds")
+SUBSET <- SUBSET %>%
+  filter(Age > 0)
+p <- ggplot(data=SUBSET, aes(x=LogAge, y=TotalGrayVol, color=Site)) +
+  geom_point() +
+  scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr")
+    ) 
+
+p
+#ggsave()
+```
+
+```{r}
+createScatter <- function(measure, metric, name) {
+  SUBSET <- readRDS(file.path("../../../BrainChartsCode/PRIME-DE-Lifespan/RDS", measure, metric, "SUBSET.rds"))
+  SUBSET <- SUBSET %>%
+    filter(Age > 0) %>%
+    mutate(Pipeline = ifelse((Site == "site-neurodev" | Site == "site-NKIdev") & Age < 0.33, 2, 1)) %>%
+    mutate(Pipeline = ifelse(Age < 0, 3, Pipeline)) %>%
+    mutate(Pipeline = factor(Pipeline, levels = c("1", "2", "3"), labels = c("Standard", "Modified", "Prenatal")))
+  colors <- pal_npg("nrc")(3)
+  p <- ggplot(data=SUBSET, aes_string(x="LogAge", y=metric, color="Pipeline")) +
+    geom_point(alpha=0.6) +
+    geom_vline(xintercept=log(0.452), linetype="dashed", color="black") +
+    geom_vline(xintercept=log(0.452 + 0.33), linetype="dashed", color="black") +
+    scale_color_manual(values = colors) +
+    ggtitle(name) +
+    theme_bw() +
+    ylab("") +
+    xlab("") +
+    ggeasy::easy_center_title() +
+    scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr")
+    ) +
+    theme(
+      legend.text = element_text(size=12),
+      legend.title = element_text(size=14)
+    ) +
+    guides(colour = guide_legend(override.aes = list(size=3)))
+  if(metric == "SubCortGrayVol") {
+    p <- p +
+      theme(legend.position="none")
+  }
+  print(p)
+}
+
+GMV <- createScatter("ASEG.VOLUME", "TotalGrayVol", "GMV")
+WMV <- createScatter("ASEG.VOLUME", "CorticalWhiteMatterVol", "WMV")
+sGMV <- createScatter("ASEG.VOLUME", "SubCortGrayVol", "sGMV")
+VV <- createScatter("ASEG.VOLUME", "Total.Lateral.Ventricle", "Ventricle")
+SA <- createScatter("MARKOV.AREA", "Total.Area", "SA")
+CT <- createScatter("MARKOV.THICKNESS", "Mean.Thickness", "CT")
+final <- GMV + WMV + sGMV + VV +
+  plot_layout(
+    axis_titles = "collect",
+    guides = "collect"
+  )
+final
+ggsave(plot=final, file.path("SupplementaryCombatImages/RawTissuePipeline.png"), width=12, height=6)
+ggsave(plot=final, file.path("SupplementaryCombatImages/RawTissuePipeline.pdf"), width=12, height=6)
+```
+```{r}
+createDist <- function(measure, metric, name) {
+  library(ggplot2)
+  library(dplyr)
+  library(ggeasy)
+  
+  # Read and preprocess the data
+  SUBSET <- readRDS(file.path("../../RDS", measure, metric, "SUBSET.rds"))
+  SUBSET <- SUBSET %>%
+    mutate(Pipeline = ifelse(Site == "site-neurodev" | Site == "site-NKIdev", 2, 1)) %>%
+    mutate(Pipeline = factor(Pipeline, levels = c("1", "2"), labels = c("Standard", "Modified")))
+  FILT <- SUBSET %>%
+    filter(Age > 0 & Age < 3)
+  
+  # Perform Mann-Whitney U test
+  group1 <- FILT %>% filter(Pipeline == "Standard") %>% pull(metric)
+  group2 <- FILT %>% filter(Pipeline == "Modified") %>% pull(metric)
+  wilcox_test_result <- wilcox.test(group1, group2)
+  
+  # Determine if the test is significant
+  p_value <- wilcox_test_result$p.value
+  significant <- p_value < 0.05
+  annotation_text <- if (significant) "*" else ""
+  
+  # Create the density plot
+  p <- ggplot(data = FILT, aes_string(x = metric, fill = "Pipeline")) +
+    geom_density(alpha = 0.7) +
+    ggtitle(name) +
+    theme_bw() +
+    ggeasy::easy_center_title()
+  
+  # Add annotation if significant
+  if (significant) {
+    p <- p + annotate("text", x = Inf, y = Inf, label = annotation_text, 
+                      hjust = 1.5, vjust = 2, size = 10, color = "red")
+  }
+  
+  # Print the plot and test results
+  print(p)
+  cat("Mann-Whitney U test result for", name, ":\n")
+  print(wilcox_test_result)
+}
+
+# Example usage
+createDist("ASEG.VOLUME", "TotalGrayVol", "GMV")
+createDist("ASEG.VOLUME", "CorticalWhiteMatterVol", "WMV")
+createDist("ASEG.VOLUME", "SubCortGrayVol", "sGMV")
+createDist("ASEG.VOLUME", "Total.Lateral.Ventricle", "VV")
+createDist("MARKOV.AREA", "Total.Area", "SA")
+createDist("MARKOV.THICKNESS", "Mean.Thickness", "CT")
+```
+
+
+```{r}
+## Test totalgrayvol
+lmTest <- function(measure, metric, name) {
+  SUBSET <- readRDS(file.path("../../RDS", measure, metric, "SUBSET.rds"))
+  SUBSET <- SUBSET %>%
+    mutate(Pipeline = ifelse((Site == "site-neurodev" | Site == "site-NKIdev") & Age < 0.33, 2, 1)) %>%
+    mutate(Pipeline = factor(Pipeline, levels = c("1", "2"), labels = c("Standard", "Modified")))
+  FILT <- SUBSET %>%
+    filter(Age > 0 & Age < 0.33)
+  formula <- paste0(metric, " ~ Pipeline + (1|Site) + Sex + Age")
+  lmtest <- lmer(formula, data=FILT)
+  print(name)
+  print(summary(lmtest))
+}
+lmTest("ASEG.VOLUME", "TotalGrayVol", "GMV")
+lmTest("ASEG.VOLUME", "CorticalWhiteMatterVol", "WMV")
+lmTest("ASEG.VOLUME", "SubCortGrayVol", "sGMV")
+lmTest("ASEG.VOLUME", "Total.Lateral.Ventricle", "VV")
+lmTest("MARKOV.AREA", "Total.Area", "SA")
+lmTest("MARKOV.THICKNESS", "Mean.Thickness", "CT")
+```
+
+```{r}
+library(mgcv)
+
+# Define the new function to use a GAM model
+gamTest <- function(measure, metric, name) {
+  SUBSET <- readRDS(file.path("../../RDS", measure, metric, "SUBSET.rds"))
+  SUBSET <- SUBSET %>%
+    mutate(Pipeline = ifelse((Site == "site-neurodev" | Site == "site-NKIdev") & Age < 0.33, 2, 1)) %>%
+    mutate(Pipeline = factor(Pipeline, levels = c("1", "2"), labels = c("Standard", "Modified")))
+  FILT <- SUBSET %>%
+    filter(Age > 0 & Age < 0.33)
+  formula <- as.formula(paste0(metric, " ~ Pipeline + s(Site, bs='re') + Sex + s(Age, bs='cs')"))
+  gamtest <- gam(formula, data = FILT)
+  print(name)
+  print(summary(gamtest))
+}
+
+# Call the new function for each measure and metric
+gamTest("ASEG.VOLUME", "TotalGrayVol", "GMV")
+gamTest("ASEG.VOLUME", "CorticalWhiteMatterVol", "WMV")
+gamTest("ASEG.VOLUME", "SubCortGrayVol", "sGMV")
+gamTest("ASEG.VOLUME", "Total.Lateral.Ventricle", "VV")
+gamTest("MARKOV.AREA", "Total.Area", "SA")
+gamTest("MARKOV.THICKNESS", "Mean.Thickness", "CT")
+```
+
+```{r}
+createScatterCombat <- function(measure, metric, name) {  
+  SUBSET <- readRDS(file.path("../../RDS", measure, metric, "SUBSET.rds"))
+  FIT.EXTRACT <- readRDS(file.path("../../RDS", measure, metric, "FIT.EXTRACT.rds"))
+  minage <- min(SUBSET$Age)
+  
+  # Generate prediction curve
+  CURVE <- Apply.Param(
+    NEWData = rbind(
+      expand.grid(list(AgeTransformed = seq(0.452, 35, by = 0.01), Sex = "F")),
+      expand.grid(list(AgeTransformed = seq(0.452, 35, by = 0.01), Sex = "M"))
+    ),
+    FITParam = FIT.EXTRACT$param
+  )
+  CURVE$LogAge <- log(CURVE$AgeTransformed)
+  
+  # Data transformation
+  SUBSET <- SUBSET %>%
+    filter(Age > 0) %>%
+    mutate(Pipeline = ifelse((Site == "site-neurodev" | Site == "site-NKIdev") & Age < 0.33, 2, 1)) %>%
+    mutate(Pipeline = factor(Pipeline, levels = c("1", "2"), labels = c("Standard", "Modified")))
+  
+  # Build the plot with male/female lines and blue/red colors
+  p <- ggplot() +
+    geom_point(data = SUBSET, aes_string(x = "LogAge", y = metric), alpha = 0.6) +  # Points for pipelines
+    geom_line(data = CURVE, aes_string(x = "LogAge", y = "PRED.m500.pop", color="Sex"), size = 1.2, alpha = 0.75) + 
+    scale_color_manual(values = c("M" = "blue", "F" = "red")) +# Blue line for females
+    geom_vline(xintercept = log(0.452), linetype = "dashed", color = "black") +
+    geom_vline(xintercept = log(0.452 + 0.33), linetype = "dashed", color = "black") +
+    
+    # Add color scales and titles
+    ggtitle(name) +
+    theme_bw() +
+    ylab("") +
+    xlab("") +
+    ggeasy::easy_center_title() +
+    
+    # Custom X-axis labels
+    scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr")
+    ) +
+    
+    # Customize theme and guide
+    theme(
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 14)
+    ) +
+    guides(colour = guide_legend(override.aes = list(size = 3)))
+  
+  # Remove legend if the metric is "SubCortGrayVol"
+  if (metric == "SubCortGrayVol") {
+    p <- p + theme(legend.position = "none")
+  }
+  
+  print(p)
+}
+
+# Create the plots
+GMV <- createScatterCombat("ASEG.VOLUME.COMBAT", "TotalGrayVol", "GMV")
+WMV <- createScatterCombat("ASEG.VOLUME.COMBAT", "CorticalWhiteMatterVol", "WMV")
+sGMV <- createScatterCombat("ASEG.VOLUME.COMBAT", "SubCortGrayVol", "sGMV")
+VV <- createScatterCombat("ASEG.VOLUME.COMBAT", "Total.Lateral.Ventricle", "Ventricle")
+
+# Combine plots and ensure axis titles are collected
+final <- GMV + WMV + sGMV + VV + 
+  plot_layout(
+    axis_titles = "collect", 
+    guides = "collect"
+  )
+
+# Save the combined plot
+ggsave(plot = final, file.path("SupplementaryCombatImages/RawTissuePipelineCombat.png"), width = 12, height = 6)
+ggsave(plot = final, file.path("SupplementaryCombatImages/RawTissuePipelineCombat.pdf"), width = 12, height = 6)
+
+final
+```
+
+```{r}
+gamTest("ASEG.VOLUME.COMBAT", "TotalGrayVol", "GMV")
+gamTest("ASEG.VOLUME.COMBAT", "CorticalWhiteMatterVol", "WMV")
+gamTest("ASEG.VOLUME.COMBAT", "SubCortGrayVol", "sGMV")
+gamTest("ASEG.VOLUME.COMBAT", "Total.Lateral.Ventricle", "VV")
+gamTest("MARKOV.AREA.COMBAT", "Total.Area", "SA")
+gamTest("MARKOV.THICKNESS.COMBAT", "Mean.Thickness", "CT")
+```
+

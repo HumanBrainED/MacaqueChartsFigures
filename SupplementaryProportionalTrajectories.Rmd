@@ -1,0 +1,195 @@
+File is for creating proportional trajectory plots:
+- Map the proportion of each region across the lifespan to totalgrayvolume
+- Compare this to human
+
+```{r}
+## Load in the data
+loadData <- function(volumeType) {
+  source("../../301.functions.r")
+  LARGE <- list()
+  LARGE[["Macaque"]] <- list()
+  LARGE[["Human"]] <- list()
+  mpheno <- c("Volume", "Area", "Thickness")
+  mdirs <- c("MARKOV.VOLUME.COMBAT", "MARKOV.AREA.COMBAT", "MARKOV.THICKNESS.COMBAT")
+  markovOrder <- fromJSON("../../data_v2.0/demographics/markov_order.json")
+  aparcOrder <- fromJSON("../../data_v2.0/demographics/aparc_order.json")
+  ## Load in the macaque data
+  for (NUM in 1:length(mpheno)) {
+    LARGE$Macaque[[mpheno[NUM]]] <- list()
+    for (IDX in 1:length(markovOrder)) {
+      FIT.EXTRACT <- readRDS(file.path("../../RDS", mdirs[NUM], names(markovOrder)[IDX], "FIT.EXTRACT.rds"))
+      CURVE <- Apply.Param(
+        NEWData = rbind(
+          expand.grid(list(FakeAge = seq(0.452, 35, by = 0.01), Sex = "F")),
+          expand.grid(list(FakeAge = seq(0.452, 35, by = 0.01), Sex = "M"))
+        ),
+        FITParam = FIT.EXTRACT$param
+      )
+      LARGE$Macaque[[mpheno[NUM]]][[names(markovOrder)[IDX]]] <- CURVE
+    }
+    pred_mean_pop_cols <- lapply(LARGE$Macaque[[mpheno[NUM]]], function(df) df[["PRED.mean.pop"]])
+    combined_df <- do.call(cbind, pred_mean_pop_cols)
+    sums <- rowSums(combined_df, na.rm = TRUE)
+    LARGE$Macaque[[mpheno[NUM]]] <- lapply(LARGE$Macaque[[mpheno[NUM]]], function(X) {
+      X$Total <- sums
+      X <- X %>%
+        filter(Sex == "M") %>%
+        mutate(PRED.mean.pop.gray.prop = PRED.mean.pop / Total)
+      return(X)
+    })
+  }
+  ## Load in the human data
+  LARGE$Human[["Volume"]] <- list()
+  for (IDX in 1:length(aparcOrder)) {
+    if (!file.exists(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))) {
+      LARGE$Human$Volume[[names(aparcOrder)[NUM]]] <- NULL
+      next
+    }
+    FIT.EXTRACT <- readRDS(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))
+    CURVE <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(log(270),log(365*95),length.out=2^10), sex = "Female")),
+        expand.grid(list(AgeTransformed = seq(log(270),log(365*95),length.out=2^10), sex = "Male"))
+        ), 
+        FITParam = FIT.EXTRACT$param
+      )
+    LARGE$Human$Volume[[names(aparcOrder)[NUM]]] <- CURVE
+  }
+  
+  return(LARGE)
+}
+
+LARGE <- loadData()
+```
+
+```{r}
+library(reshape2)
+## Now I want to visualize PRED.mean.pop.gray.prop 
+plotAllLines <- function(data) {
+  pred_mean_pop_cols <- lapply(data$Macaque$Volume, function(df) df[["PRED.mean.pop.gray.prop"]])
+  df <- as.data.frame(do.call(cbind, pred_mean_pop_cols))
+  df$FakeAge <- data$Macaque$Volume$somatosensory.area.1$FakeAge
+  df$LogAge <- log(df$FakeAge)
+  df <- melt(df, value.name = "PRED.mean.pop.gray.prop", id.vars = "LogAge", variable.name = "metric")
+  df <- df %>%
+    group_by(metric) %>%
+    mutate(PRED.mean.pop.gray.prop.scaled = PRED.mean.pop.gray.prop - mean(PRED.mean.pop.gray.prop)) %>%
+    ungroup()
+  plot <- ggplot(data=df, aes(x=LogAge, y=PRED.mean.pop.gray.prop.scaled, color=metric)) +
+    geom_line() +
+    scale_color_manual(
+      values=c(
+        "insula"="blue"
+      )
+    ) +
+    theme(
+      legend.position="none"
+    )
+  return(plot)
+}
+
+plotMatrixProps <- function(data, type) {
+  library(patchwork)
+  plot_list <- list()
+  for (NUM in 1:length(data$Macaque[[type]])) {
+    df <- data$Macaque[[type]][[NUM]]
+    df$LogAge <- log(df$FakeAge)
+    plot <- ggplot(data=df, aes(x=LogAge, y=PRED.mean.pop.gray.prop)) +
+      geom_line(size=1.5) +
+      theme_classic() +
+      ggtitle(names(data$Macaque[[type]])[NUM]) +
+      ggeasy::easy_center_title()
+    plot_list[[NUM]] <- plot
+  }
+  patch <- wrap_plots(plot_list, ncol=7, nrow=13) +
+    plot_layout(axis_titles = "collect", guides = "collect")
+  ggsave(plot=patch, file.path("SupplementaryProportionalTrajectories", paste0(type, ".matrix.prop.trajectories.png")), width=20, height=20)
+  return(patch)
+}
+
+#plot <- plotAllLines(LARGE)
+plot <- plotMatrixProps(LARGE, "Area")
+plot
+```
+```{r}
+plotStackedBar <- function(LARGE, type) {
+  BezginMapping <- readRDS(file.path("../../data_v2.0/demographics/BezginMapping.rds"))
+  data <- LARGE$Macaque[[type]]
+  df <- lapply(data, function(df) df[["PRED.mean.pop.gray.prop"]])
+  df <- as.data.frame(df)
+  df$FakeAge <- data$insula$FakeAge
+  df$LogAge <- round(log(df$FakeAge), 4)
+  df <- melt(df, value.name = "PRED.mean.pop.gray.prop", id.vars = "LogAge", variable.name = "metric")
+  df <- merge(df, BezginMapping, by="metric")
+  df <- df %>%
+    group_by(metric) %>%
+    mutate(PRED.mean.pop.gray.prop.scaled = PRED.mean.pop.gray.prop - mean(PRED.mean.pop.gray.prop)) %>%
+    ungroup()
+  
+  ## Now have to find timepoints (0, 0.33, 1, 2, 6, 15, 25) proportion of max value and plot
+  ages_raw <- c(0, 0.33, 1, 2, 3, 6, 15, 25)
+  ages <- sapply(ages_raw, function(X) round(log(X+0.452), 4))
+  plotting <- df %>%
+    filter(LogAge %in% ages) %>%
+    group_by(Names, LogAge) %>%
+    summarise(total.prop = sum(PRED.mean.pop.gray.prop))
+
+  plot <- ggplot(data=plotting, aes(x=as.factor(LogAge), y=total.prop, fill=Names)) +
+    geom_bar(stat = "identity") +
+    theme_classic() +
+    scale_fill_npg() +
+    scale_x_discrete(
+      labels = sapply(ages_raw, function(X) paste0(X, "yrs"))
+    ) +
+    xlab("") +
+    ylab("Proportion of Total Brain Area")
+  
+  ggsave(plot=plot, file.path("SupplementaryProportionalTrajectories", paste0(type, ".stackedBar.png")), width=6, height=4)
+  return(plot)
+}
+plot <- plotStackedBar(LARGE, "Area")
+plot
+```
+```{r}
+## Function for adding up all the network lines together
+plotNetworkProps <- function(LARGE, type) {
+  constant <- 0.452
+  BezginMapping <- readRDS(file.path("../../data_v2.0/demographics/BezginMapping.rds"))
+  data <- LARGE$Macaque[[type]]
+  df <- lapply(data, function(df) df[["PRED.mean.pop.gray.prop"]])
+  df <- as.data.frame(df)
+  df$FakeAge <- data$insula$FakeAge
+  df$LogAge <- round(log(df$FakeAge), 4)
+  df <- melt(df, value.name = "PRED.mean.pop.gray.prop", id.vars = "LogAge", variable.name = "metric")
+  df <- merge(df, BezginMapping, by="metric")
+  df <- df %>%
+    group_by(metric) %>%
+    mutate(PRED.mean.pop.gray.prop.scaled = PRED.mean.pop.gray.prop - mean(PRED.mean.pop.gray.prop)) %>%
+    ungroup()
+  
+  plotting <- df %>%
+    group_by(Names, LogAge) %>%
+    summarise(total.prop = sum(PRED.mean.pop.gray.prop))
+  
+  peaks <- plotting %>%
+    group_by(Names) %>%
+    top_n(1, total.prop)
+  
+  plot <- ggplot() +
+    geom_line(data=plotting, aes(x=LogAge, y=total.prop, color=Names), size=1.5) +
+    geom_point(data=peaks, aes(x=LogAge, y=total.prop, color=Names), size=5, shape=17) +
+    scale_color_npg() +
+    theme_classic() +
+    scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr"))
+  
+  ggsave(plot=plot, file.path("SupplementaryProportionalTrajectories", paste0(type, ".networkLines.png")), width=6, height=4)
+  return(plot)
+}
+
+plot <- plotNetworkProps(LARGE, "Area")
+plot
+```
+
+

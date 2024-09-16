@@ -1,0 +1,588 @@
+Generating peak ages and half peak ages
+
+```{r}
+getPropMaxValue <- function(source, species) {
+  source("../../301.functions.r")
+  if (species == "monkey") {
+    markovOrder <- fromJSON("../../data_v2.0/demographics/markov_order.json")
+    SUBSET.LIST <- list()
+    for (NUM in 1:length(markovOrder)) {
+      FIT.EXTRACT <- readRDS(file.path("../../RDS", source, names(markovOrder[NUM]), "FIT.EXTRACT.rds"))
+      CURVE <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(FakeAge = seq(0.452, 35, by = 0.01), Sex = "F")),
+        expand.grid(list(FakeAge = seq(0.452, 35, by = 0.01), Sex = "M"))
+        ), 
+        FITParam = FIT.EXTRACT$param
+      )
+      CURVE$Age <- CURVE$FakeAge - 0.452
+      SUBSET.LIST[[names(markovOrder)[NUM]]] <- CURVE %>%
+      filter(Sex == "M") %>%
+      mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop))
+    }
+    return(SUBSET.LIST) 
+  } else if (species == "human") {
+    aparcOrder <- fromJSON("../../data_v2.0/demographics/aparc_order.json")
+    SUBSET.LIST <- list()
+    for (NUM in 1:length(aparcOrder)) {
+      if (source == "Volume") {
+        if (!file.exists(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))) {
+          SUBSET.LIST[[names(aparcOrder)[NUM]]] <- list()
+          next
+        }
+        FIT.EXTRACT <- readRDS(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))
+        CURVE <- Apply.Param(
+          NEWData = rbind(
+          expand.grid(list(AgeTransformed = seq(log(365),log(365*95),by=0.001), sex = "Female")),
+          expand.grid(list(AgeTransformed = seq(log(365),log(365*95),by=0.001), sex = "Male"))
+          ), 
+          FITParam = FIT.EXTRACT$param
+        )
+      }
+      if (source == "Area") {
+        if (!file.exists(file.path("Figure4Data", paste0("FIT_SA_", names(aparcOrder)[NUM], ".rds")))) {
+          SUBSET.LIST[[names(aparcOrder)[NUM]]] <- list()
+          next
+        }
+        FIT.EXTRACT <- readRDS(file.path("Figure4Data", paste0("FIT_SA_", names(aparcOrder)[NUM], ".rds")))
+        CURVE <- Apply.Param(
+          NEWData = rbind(
+          expand.grid(list(AgeTransformed = seq(log(365),log(365*95),by=0.001), sex = "Female")),
+          expand.grid(list(AgeTransformed = seq(log(365),log(365*95),by=0.001), sex = "Male"))
+          ), 
+          FITParam = FIT.EXTRACT$param
+        )
+      }
+      if (source == "Thickness") {
+        if (!file.exists(file.path("Figure4Data", paste0("FIT_CT_", names(aparcOrder)[NUM], ".rds")))) {
+          SUBSET.LIST[[names(aparcOrder)[NUM]]] <- list()
+          next
+        }
+        FIT.EXTRACT <- readRDS(file.path("Figure4Data", paste0("FIT_CT_", names(aparcOrder)[NUM], ".rds")))
+        CURVE <- Apply.Param(
+          NEWData = rbind(
+          expand.grid(list(AgeTransformed = seq(log(365),log(365*95),by=0.001), sex = "Female")),
+          expand.grid(list(AgeTransformed = seq(log(365),log(365*95),by=0.001), sex = "Male"))
+          ), 
+          FITParam = FIT.EXTRACT$param
+        )
+      }
+      CURVE$FakeAge <- exp(CURVE$AgeTransformed)
+      CURVE$Age <- (CURVE$FakeAge - 270) / 365
+      SUBSET.LIST[[names(aparcOrder)[NUM]]] <- CURVE %>%
+        filter(sex == "Female") %>%
+        mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop))
+    }
+    return(SUBSET.LIST)
+  }
+}
+
+maxPropVolumeMacaque <- getPropMaxValue("MARKOV.VOLUME.COMBAT", "monkey")
+maxPropAreaMacaque <- getPropMaxValue("MARKOV.AREA.COMBAT", "monkey")
+maxPropThicknessMacaque <- getPropMaxValue("MARKOV.THICKNESS.COMBAT", "monkey")
+maxPropVolumeHuman <- getPropMaxValue("Volume", "human")
+maxPropAreaHuman <- getPropMaxValue("Area", "human")
+maxPropThicknessHuman <- getPropMaxValue("Thickness", "human")
+```
+
+ENTORHINAL AREA MISSING!!!
+
+```{r}
+## Okay, one AREA ROI is missing, therefore the ranked difference maps and peak ages for area are currently incorrect... have to re-do
+## For now, have to get the growth rates for Human
+loadTGV <- function() {
+  crossSpeciesPeaks <- readRDS("Figure4Data/crossSpeciesPeaks.rds")
+  return(crossSpeciesPeaks$Volume$Human)
+}
+
+extractGrowthRates <- function(LARGE) {
+  LARGE <- lapply(LARGE, function(X) {
+    if (length(X) == 0) {
+      return(X)
+    } else {
+      X <- X %>%
+        mutate(PRED.mean.pop.normalized = (PRED.mean.pop - mean(PRED.mean.pop)) / sd(PRED.mean.pop)) %>% 
+        mutate(PRED.mean.pop.normalized.slope = c(NA, diff(PRED.mean.pop) / diff(Age)))
+    return(X) 
+    }
+  })
+  return(LARGE)
+}
+
+growthValuesAtPeak <- function(LARGE) {
+  ## Return values with length 36 for visualization
+  TGV <- loadTGV()
+  values <- sapply(LARGE, function(X) {
+    if (length(X) == 0) {
+      return(0)
+    } else {
+      X <- X %>%
+        mutate(closest_age = abs(Age - TGV)) %>%
+        slice_min(closest_age) %>%
+        select(PRED.mean.pop.normalized.slope) 
+      return(X)
+    }
+  })
+  values <- unlist(c(0, values))
+  return(values)
+}
+
+volumeHuman <- extractGrowthRates(maxPropVolumeHuman)
+areaHuman <- extractGrowthRates(maxPropAreaHuman)
+thicknessHuman <- extractGrowthRates(maxPropThicknessHuman)
+
+volumeHumanVals <- growthValuesAtPeak(volumeHuman)
+areaHumanVals <- growthValuesAtPeak(areaHuman)
+thicknessHumanVals <- growthValuesAtPeak(thicknessHuman)
+```
+
+```{r}
+Visualize.Surface <- function(lh_data, rh_data, species, parcellation, save_location, color_map, color_range_min, color_range_max) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan")
+  write.table(lh_data, "Plotting/temp_lh_data.csv", col.names = FALSE, row.names = FALSE)
+  write.table(rh_data, "Plotting/temp_rh_data.csv", col.names = FALSE, row.names = FALSE)
+  system(paste("python3", "Plotting/Surface.Plotting.py", parcellation, species, save_location, color_map, color_range_min, color_range_max, "Plotting/temp_lh_data.csv", "Plotting/temp_rh_data.csv", sep = " "))
+}
+
+Visualize.Surface(volumeHumanVals, volumeHumanVals, 
+                  "human", "aparc", 
+                  "Plotting/Final/Figure3Images/HumanGrowth/volumeGrowth.png",
+                  "coolwarm",
+                  -0.02, 0.02)
+Visualize.Surface(areaHumanVals, areaHumanVals,
+                  "human", "aparc",
+                  "Plotting/Final/Figure3Images/HumanGrowth/areaGrowth.png",
+                  "coolwarm",
+                  -0.01, 0.01)
+Visualize.Surface(thicknessHumanVals, thicknessHumanVals,
+                  "human", "aparc",
+                  "Plotting/Final/Figure3Images/HumanGrowth/thicknessGrowth.png",
+                  "coolwarm",
+                  -1e-5, 1e-5)
+```
+
+```{r}
+## Need to load in peaks for volume, area, thickness for human data
+loadHumanMacaqueAparcPeaks <- function() {
+  ## Load in the peaks for both species (TotalGrayVol, SurfaceArea, CorticalThickness)
+  aparcLabels <- fromJSON("../../data_v2.0/demographics/aparc_order.json")
+  MesulamNames <- c("Paralimbic", "High-order Association", "Modality-specific Association", "Idiotypic (primary)")
+  MesulamMapping <- read.csv("Figure3Data/MacaquePeaksInHuman/aparc/aparc2Mesulam/M.Volume.mapping.L.csv", header=FALSE, col.names="MesulamLabels")
+  MesulamMapping <- MesulamMapping %>%
+    mutate(MesulamNames = MesulamNames[MesulamLabels])
+  PEAKS <- list()
+  PEAKS[["Volume"]] <- data.frame(
+    Macaque = read.csv("Figure3Data/MacaquePeaksInHuman/aparc/csv/M.Volume.lh.csv", header=FALSE, col.names="Macaque"),
+    Human = read.csv("Figure3Data/HumanPeaks/volume_peak.csv", header=FALSE, col.names="Human"),
+    AparcNames = c("unknown", names(aparcLabels)),
+    MesulamLabels = MesulamMapping$MesulamLabels,
+    MesulamNames = MesulamMapping$MesulamNames
+  )
+  PEAKS[["Area"]] <- data.frame(
+    Macaque = read.csv("Figure3Data/MacaquePeaksInHuman/aparc/csv/M.Area.lh.csv", header=FALSE, col.names="Macaque"),
+    Human = read.csv("Figure3Data/HumanPeaks/area_peaks.csv", header=FALSE, col.names="Human"),
+    AparcNames = c("unknown", names(aparcLabels)),
+    MesulamLabels = MesulamMapping$MesulamLabels,
+    MesulamNames = MesulamMapping$MesulamNames
+  )
+  PEAKS[["Thickness"]] <- data.frame(
+    Macaque = read.csv("Figure3Data/MacaquePeaksInHuman/aparc/csv/M.Thickness.lh.csv", header=FALSE, col.names="Macaque"),
+    Human = read.csv("Figure3Data/HumanPeaks/thickness_peaks.csv", header=FALSE, col.names="Human"),
+    AparcNames = c("unknown", names(aparcLabels)),
+    MesulamLabels = MesulamMapping$MesulamLabels,
+    MesulamNames = MesulamMapping$MesulamNames
+  )
+  saveRDS(PEAKS, "Figure3Data/HumanMacaqueAparcPeaks.rds")
+  return(PEAKS)
+}
+aparcPeaks <- loadHumanMacaqueAparcPeaks()
+View(aparcPeaks)
+```
+
+```{r}
+## Now I need to get 50 percent peaks as well
+getMidPeakHuman <- function(LARGE) {
+  values <- sapply(LARGE, function(X) {
+    if (length(X) == 0) {
+      return(0)
+    } else {
+      max_half <- max(X$PRED.mean.pop) / 2
+      max_age <- X$Age[which.max(X$PRED.mean.pop)]
+      closest_row <- X %>%
+        filter(Age < max_age) %>%
+        mutate(diff = abs(PRED.mean.pop - max_half)) %>%
+        arrange(diff) %>%
+        slice(1) %>%
+        pull(Age)
+      if (length(closest_row) == 0) {
+        closest_row <- 0
+      }
+      return(closest_row) 
+    }
+  })
+}
+getFullPeakHuman <- function(LARGE) {
+  values <- sapply(LARGE, function(X) {
+    if (length(X) == 0) {
+      return(0)
+    } else {
+      age <- X %>%
+        filter(PRED.m500.pop == max(PRED.m500.pop)) %>%
+        pull(Age)
+      return(age)
+    }
+  })
+}
+
+areaPeakHuman <- c(0, getFullPeakHuman(areaHuman))
+volumePeakHuman <- c(0, getFullPeakHuman(volumeHuman))
+thicknessPeakHuman <- c(0, getFullPeakHuman(thicknessHuman))
+
+#midVolumePeakHuman <- c(0, getMidPeakHuman(volumeHuman))
+#midAreaPeakHuman <- c(0, getMidPeakHuman(areaHuman))
+#midThicknessPeakHuman <- c(0, getMidPeakHuman(thicknessHuman))
+
+Visualize.Surface(thicknessPeakHuman, thicknessPeakHuman, 
+                  "human", "aparc", 
+                  "Plotting/Final/Figure3Images/HumanPeaks/thicknessPeakFull.png",
+                  "RdYlBu_r",
+                  0, 16)
+Visualize.Surface(areaPeakHuman, areaPeakHuman,
+                  "human", "aparc",
+                  "Plotting/Final/Figure3Images/HumanPeaks/areaPeakFull.png",
+                  "RdYlBu_r",
+                  0, 16)
+Visualize.Surface(volumePeakHuman, volumePeakHuman,
+                  "human", "aparc",
+                  "Plotting/Final/Figure3Images/HumanPeaks/volumePeakFull.png",
+                  "RdYlBu_r",
+                  0, 16)
+```
+
+```{r}
+## Now I need to get the mid peaks for the macaque
+getMidPeakMacaque <- function(LARGE, source) {
+  markovOrder <- fromJSON(file.path("../../data_v2.0/demographics/markov_order.json"))
+  halfPeak <- list()
+  for (NUM in 1:length(markovOrder)) {
+    markov_name <- names(markovOrder)[NUM]
+    peakData <- readRDS(file.path("../../RDS", source, markov_name, "peak_CI.rds"))
+    peakAge <- peakData$Male_Peak - 0.455
+    max_half <- max(LARGE[[markov_name]]$PRED.mean.pop) / 2
+    midPeak <- LARGE[[markov_name]] %>%
+      filter(Age < peakAge) %>%
+      mutate(diff = abs(PRED.mean.pop - max_half)) %>%
+      arrange(diff) %>%
+      slice(1) %>%
+      pull(Age)
+    if (length(midPeak) == 0) {
+        midPeak <- 0
+    }
+    halfPeak[[markov_name]] <- midPeak
+  }
+  values <- sapply(halfPeak, function(X) X)
+  return(values)
+}
+
+midPeakVolumeMacaque <- c(0, getMidPeakMacaque(maxPropVolumeMacaque, "MARKOV.VOLUME.COMBAT"))
+midPeakAreaMacaque <- c(0, getMidPeakMacaque(maxPropAreaMacaque, "MARKOV.AREA.COMBAT"))
+midPeakThicknessMacaque <- c(0, getMidPeakMacaque(maxPropThicknessMacaque, "MARKOV.THICKNESS.COMBAT"))
+Visualize.Surface(midPeakVolumeMacaque, midPeakVolumeMacaque,
+                  "monkey", "markov",
+                  "Plotting/Final/Figure3Images/MacaquePeaks/volume_half_peaks.png",
+                  "Reds",
+                  0, 0.25)
+Visualize.Surface(midPeakAreaMacaque, midPeakAreaMacaque,
+                  "monkey", "markov",
+                  "Plotting/Final/Figure3Images/MacaquePeaks/area_half_peaks.png",
+                  "Reds",
+                  0, 0.25)
+Visualize.Surface(midPeakThicknessMacaque, midPeakThicknessMacaque,
+                  "monkey", "markov",
+                  "Plotting/Final/Figure3Images/MacaquePeaks/thickness_half_peaks.png",
+                  "Reds",
+                  0, 0.25)
+```
+
+```{r}
+## Code for lifespan plots in Figure 5. Users select a region, brings up the "male" or "female" curve for associated species
+# macaque = anterior.intraparietal.area
+# human = inferiorparietal
+source("../../301.functions.r")
+M.FIT <- readRDS("../../RDS/MARKOV.VOLUME.COMBAT/somatosensory.area.2/FIT.EXTRACT.rds")
+M.CURVE <- Apply.Param(
+      NEWData = rbind(
+      expand.grid(list(FakeAge = seq(0.452, 35, by=0.002), Sex = "F")),
+      expand.grid(list(FakeAge = seq(0.452, 35, by=0.002), Sex = "M"))
+      ),
+      FITParam = M.FIT$param
+    )
+M.CURVE$LogAge <- log(M.CURVE$FakeAge)
+H.FIT <- readRDS("Figure4Data/FIT_postcentral.rds")
+H.CURVE <- Apply.Param(
+      NEWData = rbind(
+      expand.grid(list(AgeTransformed = seq(log(270),log(365*95),length.out=2^10), sex = "Female")),
+      expand.grid(list(AgeTransformed = seq(log(270),log(365*95),length.out=2^10), sex = "Male"))
+      ), 
+      FITParam = H.FIT$param
+    )
+H.CURVE$FakeAge <- exp(H.CURVE$AgeTransformed)
+H.CURVE$PRED.mean.pop.scaled <- H.CURVE$PRED.mean.pop * 10000
+H.CURVE$PRED.l025.pop.scaled <- H.CURVE$PRED.l025.pop * 10000
+H.CURVE$PRED.u975.pop.scaled <- H.CURVE$PRED.u975.pop * 10000
+## Annotating peak and growth rate
+M.PEAK.males <- M.CURVE %>%
+  group_by(Sex) %>%
+  filter(PRED.mean.pop == max(PRED.mean.pop)) %>%
+  select(Sex, LogAge, PRED.mean.pop)
+M.GROWTH.males <- M.CURVE %>%
+  group_by(Sex) %>%
+  mutate(PRED.mean.pop.growth = c(diff(PRED.mean.pop) / diff(FakeAge), NA)) %>%
+  filter(PRED.mean.pop.growth == max(PRED.mean.pop.growth, na.rm = TRUE)) %>%
+  select(Sex, LogAge, PRED.mean.pop)
+H.PEAK.males <- H.CURVE %>%
+  group_by(sex) %>%
+  filter(PRED.mean.pop == max(PRED.mean.pop)) %>%
+  select(sex, AgeTransformed, PRED.mean.pop) %>%
+  mutate(PRED.mean.pop.scaled = PRED.mean.pop*10000)
+H.GROWTH.males <- H.CURVE %>%
+  group_by(sex) %>%
+  mutate(PRED.mean.pop.growth = c(diff(PRED.mean.pop) / diff(FakeAge), NA)) %>%
+  filter(PRED.mean.pop.growth == max(PRED.mean.pop.growth, na.rm = TRUE)) %>%
+  select(sex, AgeTransformed, PRED.mean.pop) %>%
+  mutate(PRED.mean.pop.scaled = PRED.mean.pop*10000)
+
+## Getting macaque curve
+M.PLOT <- ggplot() +
+  geom_line(data=M.CURVE, aes(x=LogAge, y=PRED.mean.pop, color=Sex), size=1.5) +
+  geom_line(data=M.CURVE, aes(x=LogAge, y=PRED.l025.pop, color=Sex), size=1, linetype = "dotted", alpha=0.6) +
+  geom_line(data=M.CURVE, aes(x=LogAge, y=PRED.u975.pop, color=Sex), size=1, linetype = "dotted", alpha=0.6) +
+  geom_point(data=M.PEAK.males, aes(x=LogAge, y=PRED.mean.pop, color=Sex), size=5, alpha=0.7) +
+  geom_point(data=M.GROWTH.males, aes(x=LogAge, y=PRED.mean.pop, color=Sex), size=5, shape=17, alpha=0.7) +
+  theme_classic() +
+  scale_color_manual(
+    values = c("M" = "#247BA0", "F" = "#E3170A")
+  ) +
+  ggtitle("Somatosensory Area 2") +
+  scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr")) +
+  geom_vline(xintercept=log((constant)), alpha=0.7, color="gray") + 
+  geom_vline(xintercept = log((4/12) + constant), alpha = 0.7, color = "gray") +
+  geom_vline(xintercept = log((1) + constant), alpha = 0.7, color = "gray") +
+  geom_vline(xintercept = log((2) + constant), alpha = 0.7, color = "gray") +
+  geom_vline(xintercept = log((3) + constant), alpha = 0.7, color = "gray") +
+  geom_vline(xintercept = log((6) + constant), alpha = 0.7, color = "gray") +
+  geom_vline(xintercept = log((15) + constant), alpha = 0.7, color = "gray") +
+  geom_vline(xintercept = log((25) + constant), alpha = 0.7, color = "gray") +
+  xlab("") +
+  ylab("") +
+  theme(
+    axis.text.x = element_text(size=14),
+    axis.text.y = element_text(size=14),
+    plot.title = element_text(size = 18, face = "bold")
+  )
+
+H.PLOT <- ggplot() +
+  geom_line(data=H.CURVE, aes(x=AgeTransformed, y=PRED.mean.pop.scaled, color=sex), size=1.5) +
+  geom_line(data=H.CURVE, aes(x=AgeTransformed, y=PRED.l025.pop.scaled, color=sex), size=1, linetype="dotted") +
+  geom_line(data=H.CURVE, aes(x=AgeTransformed, y=PRED.u975.pop.scaled, color=sex), size=1, linetype="dotted") +
+  geom_point(data=H.PEAK.males, aes(x=AgeTransformed, y=PRED.mean.pop.scaled, color=sex), size=5, alpha=0.7) +
+  geom_point(data=H.GROWTH.males, aes(x=AgeTransformed, y=PRED.mean.pop.scaled, color=sex), size=5, shape=17, alpha=0.7) +
+  theme_classic() +
+  scale_color_manual(
+    values = c("Male" = "#247BA0", "Female" = "#E3170A")
+  ) +
+  ggtitle("Postcentral") +
+  scale_x_continuous(
+      breaks=c(log(270), log(635), log(1365), log(2460), log(4650), log(6840), log(14870), log(22170)),
+      labels=c("Birth", "1yr", "3yr", "6yr", "12yr", "18yr", "40yr", "60yr")
+    ) +
+  geom_vline(xintercept=log(270), alpha=0.7, color="gray") +
+  geom_vline(xintercept=log(635), alpha=0.7, color="gray") +
+  geom_vline(xintercept=log(1365), alpha=0.7, color="gray") +
+  geom_vline(xintercept=log(2460), alpha=0.7, color="gray") +
+  geom_vline(xintercept=log(4650), alpha=0.7, color="gray") +
+  geom_vline(xintercept=log(6840), alpha=0.7, color="gray") +
+  geom_vline(xintercept=log(14870), alpha=0.7, color="gray") +
+  geom_vline(xintercept=log(22170), alpha=0.7, color="gray") +
+  xlab("") +
+  ylab("") +
+  theme(
+    axis.text.x = element_text(size=14),
+    axis.text.y = element_text(size=14),
+    plot.title = element_text(size = 18, face = "bold"),
+    legend.position = "none"
+  )
+
+M.PLOT
+H.PLOT
+ggsave(plot=M.PLOT, file.path("Figure4-5Images/macaqueExamplePlot.png"), width=10, height=3, dpi=400)
+ggsave(plot=H.PLOT, file.path("Figure4-5Images/humanExamplePlot.png"), width=10, height=3, dpi=400)
+```
+```{r}
+## Make blank brain surfaces, highlighting regions above
+M_dummy_values <- rep(0, 92)
+M_dummy_values[3] <- 1
+Visualize.Surface(M_dummy_values, M_dummy_values,
+                  "monkey", "markov",
+                  "Plotting/Final/Figure3Images/MacaquePeaks/dummy_peak.png",
+                  "Reds",
+                  0, 1)
+H_dummy_values <- rep(0, 36)
+H_dummy_values[23] <- 1
+Visualize.Surface(H_dummy_values, H_dummy_values,
+                  "human", "aparc",
+                  "Plotting/Final/Figure3Images/HumanPeaks/dummy_peak.png",
+                  "Reds",
+                  0, 1)
+```
+
+```{r}
+M.PLOT <- ggplot() +
+  geom_point(data=M.PEAK.males, aes(x=LogAge, y=0), size=5, color="#247BA0", alpha=0.7) +
+  geom_point(data=M.GROWTH.males, aes(x=LogAge, y=0), size=5, shape=17, color="#247BA0", alpha=0.7) +
+  theme_classic() +
+  scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr")) +
+  xlab("") +
+  ylab("") +
+  scale_y_continuous(limits = c(0,1), expand = c(0, 0)) +
+  theme(
+    axis.text.x = element_text(size=14),
+    axis.line.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+M.PLOT
+```
+```{r}
+visualizeSurfacePeaks <- function() {
+  ## Function to loop through all the parcels and highlight them
+  markovOrder <- fromJSON("../../data_v2.0/demographics/markov_order.json")
+  aparcOrder <- fromJSON("../../data_v2.0/demographics/aparc_order.json")
+  M_dummy_values <- rep(0, 92)
+  M_human_values <- rep(0, 36)
+  for (NUM in 1:length(M_dummy_values)) {
+    metric <- names(markovOrder[NUM])
+    M_dummy_values <- rep(0, 92)
+    M_dummy_values[NUM+1] <- 1
+    Visualize.Surface(M_dummy_values, M_dummy_values,
+                  "monkey", "markov",
+                  paste0("Plotting/Final/Figure4-5Images/MacaqueSurfaces/", metric, ".png"),
+                  "Reds",
+                  0, 1)
+  }
+  for (NUM in 1:length(M_human_values)) {
+    metric <- names(aparcOrder[NUM])
+    H_dummy_values <- rep(0, 36)
+    H_dummy_values[NUM+1] <- 1
+    Visualize.Surface(H_dummy_values, H_dummy_values,
+                      "human", "aparc",
+                      paste0("Plotting/Final/Figure4-5Images/HumanSurfaces/", metric, ".png"),
+                      "Reds",
+                      0, 1)
+  }
+}
+visualizeSurfacePeaks()
+```
+
+```{r}
+## Now I need to cut the images at a specific point
+library(magick)
+cropSurfacePeaks <- function() {
+  markovOrder <- fromJSON("../../data_v2.0/demographics/markov_order.json")
+  aparcOrder <- fromJSON("../../data_v2.0/demographics/aparc_order.json")
+  for (NUM in 1:length(markovOrder)) {
+    name <- names(markovOrder)[NUM]
+    basePath <- "Figure4-5Images/MacaqueSurfaces"
+    img <- image_read(file.path(basePath, paste0(name, ".png")))
+    croppedO <- image_crop(img, "800x600+0+0")
+    croppedI <- image_crop(img, "800x600+800+0")
+    image_write(croppedO, file.path(basePath, paste0(name, "O.png")))
+    image_write(croppedI, file.path(basePath, paste0(name, "I.png")))
+  }
+  for (NUM in 1:length(aparcOrder)) {
+    name <- names(aparcOrder)[NUM]
+    basePath <- "Figure4-5Images/HumanSurfaces"
+    img <- image_read(file.path(basePath, paste0(name, ".png")))
+    croppedO <- image_crop(img, "800x600+0+0")
+    croppedI <- image_crop(img, "800x600+800+0")
+    image_write(croppedO, file.path(basePath, paste0(name, "O.png")))
+    image_write(croppedI, file.path(basePath, paste0(name, "I.png")))
+  }
+}
+
+cropSurfacePeaks()
+```
+
+```{r}
+## Now combine them with the growth chart plots
+concatMacaqueImages <- function() {
+  markovOrder <- fromJSON(file="../../Data/ParcellationMappings/markov_order.json")
+  highResPath <- file.path("../../InterspeciesMapper/macaque")
+  phenotypes <- c("CortVolume", "Area", "thickness")
+  for (NUM in 1:length(markovOrder)) {
+    metric <- names(markovOrder)[NUM]
+    imgO <- image_read(file.path("Figure4-5Images/MacaqueSurfaces", paste0(metric, "O.png")))
+    imgI <- image_read(file.path("Figure4-5Images/MacaqueSurfaces", paste0(metric, "I.png")))
+    combined <- image_append(c(imgO, imgI), stack=TRUE)
+    image_write(combined, file.path("Figure4-5Images/MacaqueSurfaces", paste0(metric, "Combined.png")))
+  }
+  for (pheno in phenotypes) {
+    for (NUM in 1:length(markovOrder)) {
+      metric <- names(markovOrder)[NUM]
+      svg <- image_read(file.path(highResPath, pheno, metric, paste0(metric, "_centile_log_highres_V2.0.svg")))
+      svg_info <- image_info(svg)
+      height_svg <- svg_info$height
+      height_svg <- height_svg - 50
+      surf <- image_read(file.path("Figure4-5Images/MacaqueSurfaces", paste0(metric, "Combined.png")))
+      surf_resized <- image_scale(surf, paste0("x", height_svg))
+      combined <- image_append(c(svg, surf_resized))
+      image_write(combined, file.path(highResPath, pheno, metric, paste0(metric, "_centile_log_highres_V2.0.svg")))
+    }
+  }
+}
+
+concatHumanImages <- function() {
+  aparcOrder <- fromJSON(file="../../Data/ParcellationMappings/aparc_order.json")
+  highResPath <- file.path("../../InterspeciesMapper/human")
+  phenotypes <- c("Volume", "Area", "Thickness")
+  for (NUM in 1:length(aparcOrder)) {
+    metric <- names(aparcOrder)[NUM]
+    imgO <- image_read(file.path("Figure4-5Images/HumanSurfaces", paste0(metric, "O.png")))
+    imgI <- image_read(file.path("Figure4-5Images/HumanSurfaces", paste0(metric, "I.png")))
+    combined <- image_append(c(imgO, imgI), stack=TRUE)
+    image_write(combined, file.path("Figure4-5Images/HumanSurfaces", paste0(metric, "Combined.png")))
+  }
+  for (pheno in phenotypes) {
+    if (pheno == "Volume") {
+      prefix <- "FIT_"
+    } else if (pheno == "Area") {
+      prefix <- "FIT_SA_"
+    } else if (pheno == "Thickness") {
+      prefix <- "FIT_CT_"
+    }
+    for (NUM in 1:length(aparcOrder)) {
+      metric <- names(aparcOrder)[NUM]
+      if (metric == "corpuscallosum" | metric == "entorhinal") {
+        next
+      }
+      svg <- image_read(file.path(highResPath, pheno, paste0(prefix, metric), paste0(prefix, metric, "_centile_log_highres.svg")))
+      svg_info <- image_info(svg)
+      height_svg <- svg_info$height
+      height_svg <- height_svg - 50
+      surf <- image_read(file.path("Figure4-5Images/HumanSurfaces", paste0(metric, "Combined.png")))
+      surf_resized <- image_scale(surf, paste0("x", height_svg))
+      combined <- image_append(c(svg, surf_resized))
+      image_write(combined, file.path(highResPath, pheno, paste0(prefix, metric), paste0(prefix, metric, "_final.svg")))
+    }
+  }
+}
+
+#concatMacaqueImages()
+concatHumanImages()
+```
+

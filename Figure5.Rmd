@@ -1,0 +1,666 @@
+```{r}
+library(dplyr)
+## First get the max prop points and save them
+getPropMaxValue <- function(source, ages, species) {
+  source("../../301.functions.r")
+  if (species == "monkey") {
+    markovOrder <- fromJSON(file="../../Data/ParcellationMappings/markov_order.json")
+    SUBSET.LIST <- list()
+    for (NUM in 1:length(markovOrder)) {
+      FIT.EXTRACT <- readRDS(file.path("../../RDS", source, names(markovOrder[NUM]), "FIT.EXTRACT.rds"))
+      CURVE <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(0.452, 35, by = 0.01), Sex = "F")),
+        expand.grid(list(AgeTransformed = seq(0.452, 35, by = 0.01), Sex = "M"))
+        ),
+        FITParam = FIT.EXTRACT$param
+      )
+      CURVE$Age <- CURVE$AgeTransformed - 0.452
+      SUBSET.LIST[[names(markovOrder)[NUM]]] <- CURVE %>%
+      filter(Sex == "M") %>%
+      mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop))
+    }
+    maxProp <- lapply(SUBSET.LIST, function(X) {
+      values <- X %>%
+      filter(Age %in% ages) %>%
+      mutate(PRED.mean.pop.prop.diff = c(NA, diff(PRED.mean.pop.prop)))
+    })
+    return(maxProp)
+  } else if (species == "human") {
+    aparcOrder <- fromJSON(file="../../Data/ParcellationMappings/aparc_order.json")
+    SUBSET.LIST <- list()
+    for (NUM in 1:length(aparcOrder)) {
+      if (!file.exists(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))) {
+        SUBSET.LIST[[names(aparcOrder)[NUM]]] <- NULL
+        next
+      }
+      FIT.EXTRACT <- readRDS(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))
+      CURVE <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(log(365),log(365*95),by=0.01), sex = "Female")),
+        expand.grid(list(AgeTransformed = seq(log(365),log(365*95),by=0.01), sex = "Male"))
+        ),
+        FITParam = FIT.EXTRACT$param
+      )
+      CURVE$AgeTransformed <- exp(CURVE$AgeTransformed)
+      CURVE$Age <- (CURVE$AgeTransformed - 365) / 365
+      SUBSET.LIST[[names(aparcOrder)[NUM]]] <- CURVE %>%
+        filter(sex == "Male") %>%
+        mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop))
+    }
+    maxProp <- lapply(SUBSET.LIST, function(X) {
+      values <- X %>%
+        mutate(closest_age = sapply(Age, function(a) ages[which.min(abs(a - ages))])) %>%
+        mutate(closest_age_diff = abs(Age - closest_age)) %>%
+        group_by(closest_age) %>%
+        slice_min(closest_age_diff) %>%
+        ungroup() %>%
+        mutate(PRED.mean.pop.prop.diff = c(NA, diff(PRED.mean.pop.prop)))
+      return(values)
+    })
+    return(maxProp)
+  }
+}
+
+map2Surface <- function(valsPath, savePrefix, parcellation) {
+  system(paste("python3", "Figure5Scripts/mapToSurface.py",
+               "--lh-csv", valsPath,
+               "--rh-csv", valsPath,
+               "--parcellation", parcellation,
+               "--save-prefix", savePrefix),
+          wait=TRUE)
+}
+
+mapProportion2Surface <- function(maxProp, ages, type, species) {
+  if (species == "monkey") {
+    for (NUM in 1:length(ages)) {
+      vals <- sapply(maxProp, function(X) {
+        X$PRED.mean.pop.prop[NUM]
+      })
+      vals <- c(0, vals)
+      basePath <- file.path("Figure5Data/PropMaxValue", type, "func.gii")
+      write.table(vals, file=file.path(basePath, paste0(ages[NUM], "vals.csv")), col.names = FALSE, row.names = FALSE)
+      map2Surface(file.path(basePath, paste0(ages[NUM], "vals.csv")), paste0(basePath, "/M.", ages[NUM]), "markov")
+      if (NUM != 1) {
+        diffVals <- sapply(maxProp, function(X) {
+          X$PRED.mean.pop.prop.diff[NUM]
+        })
+        diffVals <- c(0, diffVals)
+        basePath <- file.path("Figure5Data/PropMaxValue", type, "func.gii.diff")
+        write.table(diffVals, file=file.path(basePath, paste0(ages[NUM],"-", ages[NUM-1], "vals.csv")), col.names = FALSE, row.names = FALSE)
+        map2Surface(file.path(basePath, paste0(ages[NUM],"-", ages[NUM-1], "vals.csv")), paste0(basePath, "/M.", ages[NUM], "-", ages[NUM-1]), "markov")
+      }
+    }
+  } else if (species == "human") {
+    for (NUM in 1:length(ages)) {
+      vals <- sapply(maxProp, function(X) {
+        X$PRED.mean.pop.prop[NUM]
+      })
+      vals <- c(0, vals[1:3], 0, vals[4:length(vals)])
+      basePath <- file.path("Figure5Data/PropMaxValue", type, "func.gii")
+      write.table(vals, file=file.path(basePath, paste0(ages[NUM], "vals.csv")), col.names = FALSE, row.names = FALSE)
+      map2Surface(file.path(basePath, paste0(ages[NUM], "vals.csv")), paste0(basePath, "/M.", ages[NUM]), "aparc")
+      if (NUM != 1) {
+        diffVals <- sapply(maxProp, function(X) {
+          X$PRED.mean.pop.prop.diff[NUM]
+        })
+        diffVals <- c(0, diffVals[1:3], 0, diffVals[4:length(diffVals)])
+        basePath <- file.path("Figure5Data/PropMaxValue", type, "func.gii.diff.human.space")
+        write.table(diffVals, file=file.path(basePath, paste0(ages[NUM],"-", ages[NUM-1], "vals.csv")), col.names = FALSE, row.names = FALSE)
+        map2Surface(file.path(basePath, paste0(ages[NUM],"-", ages[NUM-1], "vals.csv")), paste0(basePath, "/M.", ages[NUM], "-", ages[NUM-1]), "aparc")
+      }
+    }
+  }
+}
+ages <- c(0, 0.33, 1, 2, 6, 15, 25)
+ages_human <- c(0, 1, 3, 6, 12, 18, 40, 60)
+maxPropVolume <- getPropMaxValue("MARKOV.VOLUME.COMBAT",
+                                 ages,
+                                 "monkey")
+maxPropArea <- getPropMaxValue("MARKOV.AREA.COMBAT",
+                               ages,
+                               "monkey")
+maxPropThickness <- getPropMaxValue("MARKOV.THICKNESS.COMBAT",
+                                    ages,
+                                    "monkey")
+maxPropVolumeHuman <- getPropMaxValue("Human",
+                                      ages_human,
+                                      "human")
+## Pass it to another function to create the surfaces
+mapProportion2Surface(maxPropVolume, ages, "Volume", "monkey")
+mapProportion2Surface(maxPropArea, ages, "Area", "monkey")
+mapProportion2Surface(maxPropThickness, ages, "Thickness", "monkey")
+mapProportion2Surface(maxPropVolumeHuman, ages_human, "Volume_Human", "human")
+```
+
+```{r}
+## Visualize difference data
+Visualize.Surface <- function(lh_data, rh_data, species, parcellation, save_location, color_map, color_range_min, color_range_max) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan")
+  write.table(lh_data, "Plotting/temp_lh_data.csv", col.names = FALSE, row.names = FALSE)
+  write.table(rh_data, "Plotting/temp_rh_data.csv", col.names = FALSE, row.names = FALSE)
+  system(paste("python3", "Plotting/Surface.Plotting.py", parcellation, species, save_location, color_map, color_range_min, color_range_max, "Plotting/temp_lh_data.csv", "Plotting/temp_rh_data.csv", sep = " "), wait=TRUE)
+}
+
+loopVisualizeDiff <- function(ages, type, species, parcellation, min, max) {
+  for (NUM in 1:length(ages)) {
+    if (NUM == 1) {
+      next()
+    }
+    setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Plotting/Final")
+    basePath <- file.path("Figure5Data/PropMaxValue", type, "func.gii.diff")
+    vals <- read.csv(file.path(basePath, paste0(ages[NUM], "-", ages[NUM-1], "vals.csv")), header=FALSE)
+    print(vals)
+    savePath <- file.path(getwd(), basePath, paste0(ages[NUM], "-", ages[NUM-1], ".png"))
+    Visualize.Surface(vals, vals, species, parcellation, savePath, "coolwarm", min, max)
+  }
+}
+
+loopVisualizeDiff(ages, "Volume", "monkey", "markov", -0.1, 0.1)
+loopVisualizeDiff(ages_human, "Volume_Human", "human", "aparc", -0.2, 0.2)
+```
+
+## I need to warp the data into human space for neuroquery
+
+```{r}
+map2human <- function(type, ages) {
+  wbDir <- "/Applications/workbench/bin_macosx64/wb_command"
+  func_gii_files <- file.path("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Plotting/Final/Figure5Data/PropMaxValue", type, "func.gii.diff")
+  output <- file.path("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Plotting/Final/Figure5Data/PropMaxValue", type, "func.gii.diff.human.space")
+  deformation_spheres <- "/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Atlas/alignment_macaque-human/deformation_macaque-human"
+  human_spheres <- "/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release/Atlas/alignment_macaque-human/surfaces/Human/32k_fs_LR"
+
+  for (NUM in 1:length(ages)) {
+    if (NUM == 1) {
+      next()
+    }
+    lh_orig <- file.path(func_gii_files, paste0("M.", ages[NUM], "-", ages[NUM-1], ".lh.func.gii"))
+    rh_orig <- file.path(func_gii_files, paste0("M.", ages[NUM], "-", ages[NUM-1], ".rh.func.gii"))
+    lh_out <- file.path(output, paste0("M.", ages[NUM], "-", ages[NUM-1], ".lh.func.gii"))
+    rh_out <- file.path(output, paste0("M.", ages[NUM], "-", ages[NUM-1], ".rh.func.gii"))
+    system(paste(wbDir,
+                 "-metric-resample",
+                 lh_orig,
+                 file.path(deformation_spheres, "L.macaque-to-human.sphere.reg.32k_fs_LR.surf.gii"),
+                 file.path(human_spheres, "sub-MNI152NLin2009cAsym.L.sphere.32k_fs_LR.surf.gii"),
+                 "BARYCENTRIC",
+                 lh_out,
+                 "-largest"),
+           wait=TRUE)
+    system(paste(wbDir,
+                 "-metric-resample",
+                 rh_orig,
+                 file.path(deformation_spheres, "R.macaque-to-human.sphere.reg.32k_fs_LR.surf.gii"),
+                 file.path(human_spheres, "sub-MNI152NLin2009cAsym.R.sphere.32k_fs_LR.surf.gii"),
+                 "BARYCENTRIC",
+                 rh_out,
+                 "-largest"),
+           wait=TRUE)
+  }
+}
+
+map2human("Volume", ages)
+```
+
+```{r}
+## Now map all those files to volume space
+mapSurf2Volume <- function(ages, type) {
+  print(getwd())
+  basePath <- file.path("Figure5Data/PropMaxValue", type)
+  surfDir <- "../../Atlas/surfaces/human"
+  wbDir <- "/Applications/workbench/bin_macosx64/wb_command"
+  templateDir <- "../../Atlas/MNI/MNI152_T1_1mm_brain.nii.gz"
+  for (NUM in 1:length(ages)) {
+    ## First resample to 10k
+    # lh
+    #system(paste(wbDir,
+    #             "-metric-resample",
+    #             file.path(basePath, "func.gii", paste0("M.", ages[NUM], ".lh.func.gii")),
+    #             file.path(surfDir, "32k_fs_LR/S1200.L.sphere.32k_fs_LR.surf.gii"),
+    #             file.path(surfDir, "10k_fs_LR/S1200.L.sphere.10k_fs_LR.surf.gii"),
+    #             "BARYCENTRIC",
+    #             file.path(basePath, "func.gii.10k", paste0("M.", ages[NUM], ".lh.func.gii")),
+    #             "-largest"),
+    #       wait=TRUE)
+    # rh
+    #system(paste(wbDir,
+    #             "-metric-resample",
+    #             file.path(basePath, "func.gii", paste0("M.", ages[NUM], ".rh.func.gii")),
+    #             file.path(surfDir, "32k_fs_LR/S1200.R.sphere.32k_fs_LR.surf.gii"),
+    #             file.path(surfDir, "10k_fs_LR/S1200.R.sphere.10k_fs_LR.surf.gii"),
+    #             "BARYCENTRIC",
+    #             file.path(basePath, "func.gii.10k", paste0("M.", ages[NUM], ".rh.func.gii")),
+    #             "-largest"),
+    #       wait=TRUE)
+    # lh diff
+    #if (NUM != 1) {
+    # system(paste(wbDir,
+    #             "-metric-resample",
+    #             file.path(basePath, "func.gii.diff", paste0("M.", ages[NUM], "-", ages[NUM-1], ".lh.func.gii")),
+    #             file.path(surfDir, "32k_fs_LR/sub-MNI152NLin2009cAsym.L.sphere.32k_fs_LR.surf.gii"),
+    #             file.path(surfDir, "10k_fs_LR/sub-MNI152NLin2009cAsym.R.sphere.32k_fs_LR.surf.gii"),
+    #             "BARYCENTRIC",
+    #             file.path(basePath, "func.gii.diff.10k", paste0("M.", ages[NUM], "-", ages[NUM-1], ".lh.func.gii")),
+    #             "-largest"),
+    #        wait=TRUE)
+    #  system(paste(wbDir,
+    #             "-metric-resample",
+    #             file.path(basePath, "func.gii.diff", paste0("M.", ages[NUM], "-", ages[NUM-1], ".rh.func.gii")),
+    #             file.path(surfDir, "32k_fs_LR/sub-MNI152NLin2009cAsym.L.sphere.32k_fs_LR.surf.gii"),
+    #             file.path(surfDir, "10k_fs_LR/S1200.R.sphere.10k_fs_LR.surf.gii"),
+    #             "BARYCENTRIC",
+    #             file.path(basePath, "func.gii.diff.10k", paste0("M.", ages[NUM], "-", ages[NUM-1], ".rh.func.gii")),
+    #             "-largest"),
+    #         wait=TRUE)
+    #}
+
+    ## Now map to volume space
+    #system(paste(wbDir,
+    #             "-metric-to-volume-mapping",
+    #             file.path(basePath, "func.gii.10k", paste0("M.", ages[NUM], ".lh.func.gii")),
+    #             file.path(surfDir, "10k_fs_LR/MacaqueYerkes19.L.inflated.10k_fs_LR.surf.gii"),
+    #             templateDir,
+    #             file.path(basePath, "volumes", paste0("M.", ages[NUM], ".lh.nii.gz")),
+    #             "-ribbon-constrained",
+    #             file.path(surfDir, "10k_fs_LR/MacaqueYerkes19.L.white.10k_fs_LR.surf.gii"),
+    #             file.path(surfDir, "10k_fs_LR/MacaqueYerkes19.L.pial.10k_fs_LR.surf.gii")),
+    #       wait=TRUE)
+    #system(paste(wbDir,
+    #             "-metric-to-volume-mapping",
+    #             file.path(basePath, "func.gii.10k", paste0("M.", ages[NUM], ".rh.func.gii")),
+    #             file.path(surfDir, "10k_fs_LR/MacaqueYerkes19.R.inflated.10k_fs_LR.surf.gii"),
+    #             templateDir,
+    #             file.path(basePath, "volumes", paste0("M.", ages[NUM], "-", ages[NUM-1], ".rh.nii.gz")),
+    #             "-ribbon-constrained",
+    #             file.path(surfDir, "10k_fs_LR/MacaqueYerkes19.R.white.10k_fs_LR.surf.gii"),
+    #             file.path(surfDir, "10k_fs_LR/MacaqueYerkes19.R.pial.10k_fs_LR.surf.gii")),
+    #       wait=TRUE)
+    if (NUM != 1) {
+      system(paste(wbDir,
+                 "-metric-to-volume-mapping",
+                 file.path(basePath, "func.gii.diff.human.space", paste0("M.", ages[NUM], "-", ages[NUM-1], ".lh.func.gii")),
+                 file.path(surfDir, "32k_fs_LR/sub-MNI152NLin2009cAsym.L.midthickness.32k_fs_LR.surf.gii"),
+                 templateDir,
+                 file.path(basePath, "volumes.diff", paste0("M.", ages[NUM], "-", ages[NUM-1], ".lh.nii.gz")),
+                 "-nearest-vertex",
+                 "2"),
+           wait=TRUE)
+      system(paste(wbDir,
+                 "-metric-to-volume-mapping",
+                 file.path(basePath, "func.gii.diff.human.space", paste0("M.", ages[NUM], "-", ages[NUM-1], ".rh.func.gii")),
+                 file.path(surfDir, "32k_fs_LR/sub-MNI152NLin2009cAsym.R.midthickness.32k_fs_LR.surf.gii"),
+                 templateDir,
+                 file.path(basePath, "volumes.diff", paste0("M.", ages[NUM], "-", ages[NUM-1], ".rh.nii.gz")),
+                 "-nearest-vertex",
+                 "2"),
+           wait=TRUE)
+      system(paste("fslmaths",
+                   file.path(basePath, "volumes.diff", paste0("M.", ages[NUM], "-", ages[NUM-1], ".lh.nii.gz")),
+                   "-mul",
+                   file.path("../../Atlas/MNI/MNI152_T1_1mm_brain_mask_left.nii.gz"),
+                   file.path(basePath, "volumes.diff", paste0("M.", ages[NUM], "-", ages[NUM-1], ".lh.nii.gz"))),
+             wait=TRUE)
+      system(paste("fslmaths",
+                   file.path(basePath, "volumes.diff", paste0("M.", ages[NUM], "-", ages[NUM-1], ".rh.nii.gz")),
+                   "-mul",
+                   file.path("../../Atlas/MNI/MNI152_T1_1mm_brain_mask_right.nii.gz"),
+                   file.path(basePath, "volumes.diff", paste0("M.", ages[NUM], "-", ages[NUM-1], ".rh.nii.gz"))),
+             wait=TRUE)
+      system(paste("fslmaths",
+                 file.path(basePath, "volumes.diff", paste0("M.", ages[NUM], "-", ages[NUM-1], ".lh.nii.gz")),
+                 "-add",
+                 file.path(basePath, "volumes.diff", paste0("M.", ages[NUM], "-", ages[NUM-1], ".rh.nii.gz")),
+                 file.path(basePath, "volumes.diff", paste0("M.", ages[NUM], "-", ages[NUM-1], ".nii.gz"))),
+          wait=TRUE)
+    }
+  }
+}
+
+#mapSurf2Volume(ages_human, "Volume_Human")
+mapSurf2Volume(ages, "Volume")
+#mapSurf2Volume(ages, "Area")
+#mapSurf2Volume(ages, "Thickness")
+```
+
+```{r}
+## Now I want to generate curves based on proportional lifespan
+library(patchwork)
+propLifespanCurve <- function(LARGE, type, color, species) {
+  library(ggplot2)
+  constant <- 0.452
+  if (species == "monkey") {
+    LARGE$Macaque <- LARGE$Macaque %>%
+      filter(Sex == "M") %>%
+      filter(AgeTransformed < 6.452) %>%
+      filter(metric == type)
+
+    plot <- ggplot() +
+      geom_line(data=LARGE$Macaque, aes(x=LogAge, y=PRED.mean.pop.prop), size=2, color=color, alpha=1, linetype="dashed") +
+      theme_classic() +
+      scale_x_continuous(
+        breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((3) + constant), log((6) + constant)),
+        labels = c("Birth", "4m", "1yr", "3yr", "6yr")) +
+      xlab("") +
+      ylab("Prop. of max value") +
+      geom_vline(xintercept=log((constant)), alpha=0.65, color="black") +
+      geom_vline(xintercept = log((4/12) + constant), alpha = 0.65, color = "black") +
+      geom_vline(xintercept = log((1) + constant), alpha = 0.65, color = "black") +
+      #geom_vline(xintercept = log((2) + constant), alpha = 0.65, color = "black") +
+      geom_vline(xintercept = log((3) + constant), alpha = 0.65, color = "black") +
+      geom_vline(xintercept = log((6) + constant), alpha = 0.65, color = "black") +
+      #geom_vline(xintercept = log((15) + constant), alpha = 0.65, color = "black") +
+      #geom_vline(xintercept = log((25) + constant), alpha = 0.65, color = "black") +
+      ggtitle("Macaque") +
+      theme(
+        axis.text.x = element_text(size=20),
+        axis.text.y = element_text(size=20),
+        axis.title.y = element_text(size=20),
+        plot.title = element_text(size=24, face = "bold", margin = margin(b=10))
+      )
+
+    ggsave(paste0("Figure5Images/", type, "lifespan.png"), plot=plot, width=22, height=4)
+    return(plot)
+  } else if (species == "human") {
+    LARGE$Human <- LARGE$Human %>%
+      filter(sex == "Male") %>%
+      filter(Age < (19*365)) %>%
+      filter(metric == type)
+
+    plot <- ggplot() +
+      geom_line(data=LARGE$Human, aes(x=AgeTransformed, y=PRED.mean.pop.prop), size=2, color=color, alpha=1, linetype="dashed") +
+      theme_classic() +
+      xlab("") +
+      ylab("Prop. of max value") +
+      scale_x_continuous(
+        breaks=c(log(270), log(635), log(1365), log(2460), log(4650), log(6840)),
+        labels=c("Birth", "1yr", "3yr", "6yr", "12yr", "18yr")
+      ) +
+      scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+      geom_vline(xintercept=log(270), alpha=0.65, color="black") +
+      geom_vline(xintercept=log(635), alpha=0.7, color="black") +
+      geom_vline(xintercept=log(1365), alpha=0.7, color="black") +
+      geom_vline(xintercept=log(2460), alpha=0.7, color="black") +
+      geom_vline(xintercept=log(4650), alpha=0.7, color="black") +
+      geom_vline(xintercept=log(6840), alpha=0.7, color="black") +
+      #geom_vline(xintercept=log(14870), alpha=0.7, color="black") +
+      #geom_vline(xintercept=log(22170), alpha=0.7, color="black") +
+      ggtitle("Human") +
+      theme(
+        axis.text.x = element_text(size=20),
+        axis.text.y = element_text(size=20),
+        axis.title.y = element_text(size=20),
+        plot.title = element_text(size=24, face = "bold", margin = margin(b=10))
+      )
+
+    ggsave(paste0("Figure5Images/", type, "_human_", "lifespan.png"), plot=plot, width=22, height=4, dpi=300)
+    return(plot)
+  }
+}
+
+LARGE <- readRDS("Figure4Data/crossSpeciesCurveFits.rds")
+humanPlot <- propLifespanCurve(LARGE, "Gray Matter Volume", "#f2a59a", "human")
+macaquePlot <- propLifespanCurve(LARGE, "Gray Matter Volume", "#a6ddea", "monkey")
+plot <- humanPlot / macaquePlot +
+  plot_layout(axis_titles = "collect", guide = "collect")
+ggsave(plot=plot, "Figure5Images/humanMacaque.lifespan.png", width=12, height=14, dpi=300)
+#propLifespanCurve(LARGE, "Cortical Thickness", "#00A08799")
+#propLifespanCurve(LARGE, "Gray Matter Volume", "#DC000099", "human")
+```
+
+```{r}
+## Now we want to do an image search with the difference maps we have generated, mapping all of them to terms and saving them based on the magnitude of their difference
+runNeuroquery <- function(ages, type) {
+  basePath <- file.path("Figure5Data/PropMaxValue", type)
+  for (NUM in 1:length(ages)) {
+    if (NUM == 1) {
+      next()
+    }
+    n_studies <- 10
+    n_terms <- 200
+    dir.create(basePath, "volumes.diff", paste0("neuroquery_", ages[NUM], "-", ages[NUM-1]))
+    system(paste("python3", "Figure3Scripts/image_search.py",
+             "--image-path", file.path(basePath, "volumes.diff", paste0("M.", ages[NUM], "-", ages[NUM-1], ".nii.gz")),
+             "--n-studies", n_studies,
+             "--n-terms", n_terms,
+             "--pos-neg",
+             "--bins", 4,
+             "--output", file.path(basePath, "volumes.diff", paste0("neuroquery_", ages[NUM], "-", ages[NUM-1]))))
+  }
+}
+#runNeuroquery(ages, "Area")
+runNeuroquery(ages_human, "Volume_Human")
+runNeuroquery(ages, "Volume")
+```
+
+Now make a wordcloud from the neuroquery bins
+Take the TOP 2 and BOTTOM 2 bins (top 10% and bottom 10%), make this a parameter to change later
+Add all these terms together into one JSON, filter by similarity > 0.5
+Add either "positive" or "negative" to control for colour
+Make a wordcloud out of it
+
+Somehow it is not mapping correctly. There are words that are not being mapped to the labels properly... that was the only function I let ChatGPT do and it fucked it up, classic.
+
+```{r}
+library(jsonlite)
+library(dplyr)
+library(webshot)
+library(htmlwidgets)
+library(stringr)
+library(wordcloud2)
+
+loadKeys <- function() {
+  topics_to_keep = c(1, 4, 6, 14,
+                  18, 19, 23, 25,
+                  20, 21, 27, 29,
+                  30, 31, 33, 35,
+                  36, 38, 37, 41,
+                  44, 45, 48, 49)
+  topics_to_keep <- topics_to_keep + 1
+  labels = c('face/affective processing', ' verbal semantics', 'cued attention', 'working memory',
+          'autobiographical memory', 'reading', 'inhibition', 'motor',
+          'visual perception', 'numerical cognition', 'reward-based decision making', 'visual attention',
+          'multisensory processing', 'visuospatial','eye movements', 'action',
+          'auditory processing', 'pain', 'language', 'declarative memory',
+          'visual semantics', 'emotion', 'cognitive control', 'social cognition')
+  keys <- read.csv("Figure3Scripts/v3-topics-50-keys.txt", sep = "\t", header = FALSE, row.names = 1)
+  keys <- keys[topics_to_keep, , drop = FALSE]
+  keys$labels <- labels
+  colnames(keys) <- c("unknown", "words", "labels")
+  return(keys)
+}
+
+mapLabels <- function(path, ages) {
+  result <- list()
+  for (NUM in 1:length(ages)) {
+    terms <- list()
+    if (NUM == 1) {
+      next()
+    }
+    if (file.exists(file.path(path, paste0("neuroquery_", ages[NUM], "-", ages[NUM-1]), "threshPos", "terms.json"))) {
+      term_lines <- readLines(file.path(path, paste0("neuroquery_", ages[NUM], "-", ages[NUM-1]), "threshPos", "terms.json"))
+      terms[["threshPos"]] <- as.data.frame(do.call(rbind, lapply(term_lines, function(line) fromJSON(line, flatten = TRUE))))
+      terms[["threshPos"]]$scale <- "positive"
+    }
+    if (file.exists(file.path(path, paste0("neuroquery_", ages[NUM], "-", ages[NUM-1]), "threshNeg", "terms.json"))) {
+      term_lines <- readLines(file.path(path, paste0("neuroquery_", ages[NUM], "-", ages[NUM-1]), "threshNeg", "terms.json"))
+      terms[["threshNeg"]] <- as.data.frame(do.call(rbind, lapply(term_lines, function(line) fromJSON(line, flatten = TRUE))))
+      terms[["threshNeg"]]$scale <- "negative"
+    }
+    find_label <- function(term) {
+      matched_label <- keys$labels[str_detect(keys$words, term)]
+      if (length(matched_label) > 0) {
+        return(matched_label[1])
+      } else {
+        return(NA)
+      }
+    }
+    terms <- lapply(terms, function(X) {
+      X$label <- sapply(X$term, find_label)
+      return(X)
+    })
+    terms <- lapply(terms, function(X) {
+      X <- X %>%
+        filter(similarity > 0.5, !is.na(label)) %>%
+        mutate(similarity = as.numeric(similarity)) %>%
+        mutate(score = ifelse(scale == "negative", -(similarity), similarity))
+      return(X)
+    })
+    terms <- bind_rows(terms)
+    terms$age <- paste0(ages[NUM], "-", ages[NUM-1])
+    saveRDS(terms, file.path(path, paste0("neuroquery_", ages[NUM], "-", ages[NUM-1]), "mappedTerms.rds"))
+    result[[paste0(ages[NUM], "-", ages[NUM-1])]] <- as.data.frame(terms)
+  }
+  result <- Reduce(bind_rows, result)
+  return(result)
+}
+
+generateWordCloud <- function(terms, savePath) {
+  data <- terms %>%
+    group_by(label, scale) %>%
+    summarize(freq = abs(sum(score))) %>%
+    mutate(color = ifelse(scale == "positive", "red", "blue"))
+
+  saveRDS(data, file.path(savePath, "summaryTerms.rds"))
+  wordcloud_data <- data.frame(word = as.character(data$label), freq = data$freq, color=data$color)
+  plot <- wordcloud2(wordcloud_data, size = 0.8, color = wordcloud_data$color, backgroundColor = "white", maxRotation = 0, minRotation = 0)
+  saveWidget(plot, file = file.path(savePath, "wordcloud2.html"))
+  webshot::webshot(file.path(savePath, "wordcloud2.html"), file.path(savePath, "wordcloud2.png"), vwidth = 1000, vheight = 1000, delay=10)
+  return(plot)
+}
+
+loopWordCloud <- function(path, ages, allTerms) {
+  for (NUM in 1:length(ages)) {
+    if (NUM == 1) {
+      next()
+    }
+    terms <- allTerms %>%
+      filter(age == paste0(ages[NUM], "-", ages[NUM-1]))
+    savePath <- file.path(path, paste0("neuroquery_", ages[NUM], "-", ages[NUM-1]))
+    generateWordCloud(terms, savePath)
+  }
+}
+
+keys <- loadKeys()
+allTerms <- mapLabels("Figure5Data/PropMaxValue/Volume/volumes.diff", ages)
+loopWordCloud("Figure5Data/PropMaxValue/Volume/volumes.diff", ages, allTerms)
+#allTerms <- mapLabels("Figure5Data/PropMaxValue/Volume_Human/volumes.diff", ages_human)
+#loopWordCloud("Figure5Data/PropMaxValue/Volume_Human/volumes.diff", ages_human, allTerms)
+```
+
+Trying Neurosynth
+
+```{r}
+runNeurosynth <- function(ages, type, threshold=NULL) {
+  basePath <- file.path("Figure5Data/PropMaxValue", type)
+  for (NUM in 1:length(ages)) {
+    if (NUM == 1) {
+      next()
+    }
+    system(paste("python3", "Figure5Scripts/run_neurosynth.py",
+                 "--lh", file.path(basePath, "func.gii.diff.human.space", paste0("M.", ages[NUM], "-", ages[NUM-1], ".lh.func.gii")),
+                 "--rh", file.path(basePath, "func.gii.diff.human.space", paste0("M.", ages[NUM], "-", ages[NUM-1], ".rh.func.gii")),
+                 "--threshold", threshold,
+                 "--output", file.path(basePath, "func.gii.diff.human.space", paste0(ages[NUM], "-", ages[NUM-1]))),
+           wait=TRUE)
+  }
+}
+runNeurosynth(ages, "Volume", 60)
+```
+
+```{r}
+## Use this for thresholded differences (combine)
+library(jsonlite)
+library(dplyr)
+library(webshot)
+library(htmlwidgets)
+library(stringr)
+library(wordcloud2)
+
+generateWordCloud <- function(terms, savePath) {
+  View(terms)
+  wordcloud_data <- data.frame(word = as.character(terms$index), freq = terms$Pearson.s.r, color=terms$color)
+  plot <- wordcloud2(wordcloud_data, size = 0.8, color = wordcloud_data$color, backgroundColor = "white", maxRotation = 0, minRotation = 0)
+  saveWidget(plot, file = file.path(savePath, "wordcloud2_thresh_n_10.html"))
+  webshot::webshot(file.path(savePath, "wordcloud2_thresh_n_10.html"), file.path(savePath, "wordcloud2_thresh_n_10.png"), vwidth = 1000, vheight = 1000, delay=10)
+}
+
+loopWordCloud <- function(path, ages, n=NULL) {
+  for (NUM in 1:length(ages)) {
+    if (NUM == 1) {
+      next()
+    }
+    pos <- FALSE
+    neg <- FALSE
+    basePath <- file.path(path, paste0(ages[NUM], "-", ages[NUM-1]))
+    if (file.exists(file.path(basePath, "positive.terms.filtered.csv"))) {
+      termsPos <- read.csv(file.path(basePath, "positive.terms.filtered.csv"))
+      termsPos$color <- "red"
+      pos <- TRUE
+    }
+    if (file.exists(file.path(basePath, "negative.terms.filtered.csv"))) {
+      termsNeg <- read.csv(file.path(basePath, "negative.terms.filtered.csv"))
+      termsNeg$color <- "blue"
+      neg <- TRUE
+    }
+    if (pos & neg) {
+      terms <- rbind(termsPos, termsNeg)
+    } else if (pos) {
+      terms <- termsPos
+    } else if (neg) {
+      terms <- termsNeg
+    }
+    terms$Pearson.s.r <- abs(terms$Pearson.s.r)
+    if (is.null(n)) {
+      terms <- terms %>%
+        arrange(desc(Pearson.s.r))
+      generateWordCloud(terms, basePath)
+    } else {
+      terms <- terms %>%
+        arrange(desc(Pearson.s.r)) %>%
+        top_n(n, wt = Pearson.s.r)
+      generateWordCloud(terms, basePath)
+    }
+  }
+}
+
+loopWordCloud(file.path("Figure5Data/PropMaxValue/Volume/func.gii.diff.human.space"), ages, n=10)
+```
+
+```{r}
+library(jsonlite)
+library(dplyr)
+library(webshot)
+library(htmlwidgets)
+library(stringr)
+library(wordcloud2)
+
+generateWordCloud <- function(terms, savePath) {
+  wordcloud_data <- data.frame(word = as.character(terms$index), freq = terms$Pearson.s.r, color=terms$color)
+  plot <- wordcloud2(wordcloud_data, size = 0.8, color = wordcloud_data$color, backgroundColor = "transparent", maxRotation = 0, minRotation = 0)
+  saveWidget(plot, file = file.path(savePath, "wordcloud2_global_top_n.html"))
+  webshot::webshot(file.path(savePath, "wordcloud2_global_top_n.html"), file.path(savePath, "wordcloud2_global_top_n.png"), vwidth = 1000, vheight = 1000, delay=10)
+}
+
+loopWordCloud <- function(path, ages, n=NULL) {
+  for (NUM in 1:length(ages)) {
+    if (NUM == 1) {
+      next()
+    }
+    basePath <- file.path(path, paste0(ages[NUM], "-", ages[NUM-1]))
+    terms <- as.data.frame(read.csv(file.path(basePath, "terms.filtered.csv")))
+    terms$color <- ifelse(terms$Pearson.s.r < 0, "blue", "red")
+    terms$Pearson.s.r <- abs(terms$Pearson.s.r)
+    if (is.null(n)) {
+      generateWordCloud(terms, basePath)
+    } else {
+      terms <- terms %>%
+        arrange(desc(Pearson.s.r)) %>%
+        top_n(n, wt = Pearson.s.r)
+      View(terms)
+      generateWordCloud(terms, basePath)
+    }
+  }
+}
+
+loopWordCloud(file.path("Figure5Data/PropMaxValue/Volume_Human/func.gii.diff"), ages_human)
+```

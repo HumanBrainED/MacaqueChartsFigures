@@ -1,0 +1,113 @@
+## File for extracting the peaks and CI
+
+```{r}
+extractPeaks <- function(measure, name) {
+  markovOrder <- fromJSON("../../Data/ParcellationMappings/markov_order.json")
+  peakList <- list()
+  basePath <- file.path("../../RDS", measure)
+  for (NUM in 1:length(markovOrder)) {
+    metric <- names(markovOrder)[NUM]
+    if (!file.exists(file.path(basePath, metric, "peak_CI.rds"))) {
+      next
+    }
+    peak <- readRDS(file.path(basePath, metric, "peak_CI.rds"))
+    peak <- round(peak - 0.452, 3)
+    newPeak <- data.frame(
+      MalePeak = paste0(peak$Male_Peak, " (", peak$Male_Peak_Lower, "-", peak$Male_Peak_Upper, ")"),
+      FemalePeak = paste0(peak$Female_Peak, " (", peak$Female_Peak_Lower, "-", peak$Female_Peak_Upper, ")")
+    )
+    peakList[[names(markovOrder)[NUM]]] <- newPeak
+  }
+  if (name == "Area") {
+    peak <- readRDS(file.path(basePath, "Total.Area", "peak_CI.rds"))
+    peak <- round(peak - 0.452, 3)
+    newPeak <- data.frame(
+      MalePeak = paste0(peak$Male_Peak, " (", peak$Male_Peak_Lower, "-", peak$Male_Peak_Upper, ")"),
+      FemalePeak = paste0(peak$Female_Peak, " (", peak$Female_Peak_Lower, "-", peak$Female_Peak_Upper, ")")
+    )
+    peakList[["Total.Area"]] <- newPeak
+  }
+  if (name == "Thickness") {
+    peak <- readRDS(file.path(basePath, "Mean.Thickness", "peak_CI.rds"))
+    peak <- round(peak - 0.452, 3)
+    newPeak <- data.frame(
+      MalePeak = paste0(peak$Male_Peak, " (", peak$Male_Peak_Lower, "-", peak$Male_Peak_Upper, ")"),
+      FemalePeak = paste0(peak$Female_Peak, " (", peak$Female_Peak_Lower, "-", peak$Female_Peak_Upper, ")")
+    )
+    peakList[["Mean.Thickness"]] <- newPeak
+  }
+  peak_df <- do.call(rbind, peakList)
+  peak_df$Metric <- row.names(peak_df)
+  names(peak_df) <- c(paste0(name, "MalePeak"), paste0(name, "FemalePeak"), "Metric")
+  saveRDS(peak_df, file.path("SupplementaryPeaksData", paste0(name, ".rds")))
+  write.csv(peak_df, file.path("SupplementaryPeaksData", paste0(name, ".csv")), row.names=FALSE)
+  return(peak_df)
+}
+
+extractGlobalPeaks <- function() {
+  peakList <- list()
+  metrics <- c("TotalGrayVol", "CorticalWhiteMatterVol", "SubCortGrayVol", "Total.Lateral.Ventricle", "BrainSegVolNotVentNoCerebellum")
+  for (NUM in 1:length(metrics)) {
+    peak <- readRDS(file.path("../../RDS/ASEG.VOLUME.COMBAT", metrics[NUM], "peak_CI.rds"))
+    peak <- round(peak - 0.452, 3)
+    newPeak <- data.frame(
+      GlobalMalePeak = paste0(peak$Male_Peak, " (", peak$Male_Peak_Lower, "-", peak$Male_Peak_Upper, ")"),
+      GlobalFemalePeak = paste0(peak$Female_Peak, " (", peak$Female_Peak_Lower, "-", peak$Female_Peak_Upper, ")")
+    )
+    peakList[[metrics[NUM]]] <- newPeak
+  }
+  peak_df <- do.call(rbind, peakList)
+  peak_df$Metric <- row.names(peak_df)
+  saveRDS(peak_df, file.path("SupplementaryPeaksData/Global.rds"))
+  write.csv(peak_df, file.path("SupplementaryPeaksData/Global.csv"), row.names=FALSE)
+  return(peak_df)
+}
+
+volumePeaks <- extractPeaks("MARKOV.VOLUME.COMBAT", "Volume")
+areaPeaks <- extractPeaks("MARKOV.AREA.COMBAT", "Area")
+thicknessPeaks <- extractPeaks("MARKOV.THICKNESS.COMBAT", "Thickness")
+#globalPeaks <- extractGlobalPeaks()
+
+merged <- merge(volumePeaks, areaPeaks, by="Metric")
+merged <- merge(merged, thicknessPeaks, by="Metric")
+write.csv(merged, file.path("SupplementaryPeaksData/MergedRegionalPeaks.csv"), row.names=FALSE)
+```
+
+```{r}
+extractPeaksRaw <- function(measure, name) {
+  markovOrder <- fromJSON("../../Data/ParcellationMappings/markov_order.json")
+  peakList <- list()
+  basePath <- file.path("../../RDS", measure)
+  for (NUM in 1:length(markovOrder)) {
+    metric <- names(markovOrder)[NUM]
+    if (!file.exists(file.path(basePath, metric, "peak_CI.rds"))) {
+      next
+    }
+    peak <- readRDS(file.path(basePath, metric, "peak_CI.rds"))
+    peak <- round(peak - 0.452, 3)
+    newPeak <- data.frame(
+      MalePeak = peak$Male_Peak,
+      FemalePeak = peak$Female_Peak
+    )
+    peakList[[names(markovOrder)[NUM]]] <- newPeak
+  }
+  peak_df <- do.call(rbind, peakList)
+  peak_df$Metric <- row.names(peak_df)
+  names(peak_df) <- c("MalePeak", "FemalePeak", "Metric")
+  saveRDS(peak_df, file.path("SupplementaryPeaksData", paste0(name, ".rds")))
+  write.csv(peak_df, file.path("SupplementaryPeaksData", paste0(name, ".csv")), row.names=FALSE)
+  return(peak_df)
+}
+
+volumePeaks <- extractPeaksRaw("MARKOV.VOLUME.COMBAT", "Volume")
+areaPeaks <- extractPeaksRaw("MARKOV.AREA.COMBAT", "Area")
+thicknessPeaks <- extractPeaksRaw("MARKOV.THICKNESS.COMBAT", "Thickness")
+saveRDS(volumePeaks, "SupplementaryPeaksData/VolumePeaksRaw.rds")
+saveRDS(areaPeaks, "SupplementaryPeaksData/AreaPeaksRaw.rds")
+saveRDS(thicknessPeaks, "SupplementaryPeaksData/ThicknessPeaksRaw.rds")
+```
+
+```{r}
+volumePeaks
+```
+

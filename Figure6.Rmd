@@ -1,0 +1,2112 @@
+This will be incremental time points of development mapped into neurosynth correlations
+Start with BIG differences (0.33-0, 1-0.33, 3-1, etc..)
+Then lets do incremental differences and map it onto a distribution plot
+
+USED FOR NEUROSYNTH FINAL
+
+```{r}
+## This will be for the barplot of the LARGE differences (timepoints and surfaces already saved in Figure5Data/PropMaxValue)
+## We need a function that will take in each map, and then feed it into neurosynth
+## Then, we take the neurosynth correlations (filtered by desired terms) and map them onto a bar plot
+## Do this for each time point for human and macaque
+
+runNeurosynth <- function(ages, type, threshold=NULL) {
+  basePath <- file.path("Figure5Data/PropMaxValue", type)
+  for (NUM in 1:length(ages)) {
+    if (NUM == 1) {
+      next()
+    }
+    system(paste("python3", "Figure5Scripts/run_neurosynth.py",
+                 "--lh", file.path(basePath, "func.gii.diff.human.space", paste0("M.", ages[NUM], "-", ages[NUM-1], ".lh.func.gii")),
+                 "--rh", file.path(basePath, "func.gii.diff.human.space", paste0("M.", ages[NUM], "-", ages[NUM-1], ".rh.func.gii")),
+                 "--output", file.path(basePath, "func.gii.diff.human.space", paste0(ages[NUM], "-", ages[NUM-1]))),
+           wait=TRUE)
+  }
+}
+ages_macaque <- c(0, 0.33, 1, 2, 3, 6)
+ages_human <- c(0, 1, 3, 6, 12, 18, 40, 60)
+
+#runNeurosynth(ages_human, "Volume_Human")
+runNeurosynth(ages_macaque, "Volume")
+```
+
+FINAL
+
+```{r}
+## Now load in the data (for each n, "terms.filtered.csv"), plot the correlations on bar plots 
+## Come back to this later, we want to make it more clear
+loadData <- function(ages, type) {
+  allTerms <- list()
+  for (NUM in 1:length(ages)) {
+    if (NUM == 1) {
+      next()
+    }
+    terms <- read.csv(file.path("Figure5Data/PropMaxValue", type, "func.gii.diff.human.space", paste0(ages[NUM], "-", ages[NUM-1]), "terms.filtered.csv"))
+    terms$age_range <- paste0(ages[NUM], "-", ages[NUM-1])
+    allTerms[[NUM-1]] <- terms
+  }
+  #allTerms <- do.call(rbind, allTerms)
+  return(allTerms)
+}
+
+plotBarCorrelations <- function(allTerms, ages, species) {
+  ## This function takes in a list of dataframes, plots the bar plot of each one, returns a patchwork of all age range bar plots
+  library(patchwork)
+  library(ggplot2)
+  plotList <- list()
+  for (NUM in 1:length(ages)) {
+    if (NUM == 1) {
+      next()
+    }
+    df <- allTerms[[NUM-1]]
+    max_index <- which.max(df$Pearson.s.r)
+    min_index <- which.min(df$Pearson.s.r)
+    
+    df$color <- ifelse(df$Pearson.s.r == df$Pearson.s.r[max_index], "max",
+                       ifelse(df$Pearson.s.r == df$Pearson.s.r[min_index], "min", "not"))
+    
+    plot <- ggplot(data=df, aes(x=index, y=Pearson.s.r, fill=color)) +
+      geom_col() +
+      ylim(-0.3, 0.3) +
+      theme_classic() +
+      xlab("") +
+      ylab("Term Correlation") + 
+      ggtitle(paste0(ages[NUM], "yrs", " - ", ages[NUM-1], "yrs")) +
+      geom_vline(xintercept = df$index, linetype = "dashed", color="grey", alpha=0.4) +
+      theme(
+        axis.text.x = element_text(hjust = 1, vjust = 0.5, angle=90, size=10),
+        legend.position = "none"
+      ) +
+      scale_fill_manual(
+        values = c(
+          "max" = "#DC000099",
+          "min" = "#3C548899",
+          "not" = "grey"
+        )
+      )
+    
+    plotList[[NUM-1]] <- plot
+  }
+  allPlots <- wrap_plots(plotList, nrow=1) +
+    plot_layout(guides = "collect", axis_titles = "collect")
+  return(allPlots)
+}
+
+ages_macaque <- c(0, 0.33, 1, 2, 3, 6)
+ages_human <- c(0, 1, 3, 6, 12, 18)
+humanTerms <- loadData(ages_human, "Volume_Human")
+macaqueTerms <- loadData(ages_macaque, "Volume")
+humanBar <- plotBarCorrelations(humanTerms, ages_human, "Human") 
+macaqueBar <- plotBarCorrelations(macaqueTerms, ages_macaque, "Macaque")
+plot <- humanBar / macaqueBar +
+  plot_layout(guides = "collect")
+ggsave(plot=plot, file.path("Figure6Images/NeurosynthBarPlot_timepoints_adolescence_global.png"), width=20, height=10, dpi=300)
+```
+
+FINAL
+
+```{r}
+## Now we want to get correlations across time for each term. This means we will have to calculate "age windows" of volume for each species.
+
+getAgeWindow <- function(increment, species) {
+  source("../../301.functions.r")
+  if (species == "monkey") {
+    markovOrder <- fromJSON(file="../../Data/ParcellationMappings/markov_order.json")
+    age_sequence <- seq(0, 6, by=increment)
+    allCurves <- list()
+    for (NUM in 1:length(markovOrder)) {
+      FIT.EXTRACT <- readRDS(file.path("../../RDS/MARKOV.VOLUME.COMBAT", names(markovOrder)[NUM], "FIT.EXTRACT.rds"))
+      CURVE <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(0.452, 35, by = 0.01), Sex = "F")),
+        expand.grid(list(AgeTransformed = seq(0.452, 35, by = 0.01), Sex = "M"))
+        ), 
+        FITParam = FIT.EXTRACT$param
+      )
+      CURVE$LogAge <- log(CURVE$AgeTransformed)
+      CURVE$Age <- CURVE$AgeTransformed - 0.452
+      CURVE <- CURVE %>%
+        filter(Sex == "M") %>%
+        mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop))
+      CURVE <- CURVE %>%
+        mutate(closest_age = sapply(Age, function(a) age_sequence[which.min(abs(a - age_sequence))])) %>%
+        mutate(closest_age_diff = abs(Age - closest_age)) %>%
+        group_by(closest_age) %>%
+        slice_min(closest_age_diff) %>%
+        ungroup() %>%
+        mutate(PRED.mean.pop.prop.diff = c(diff(PRED.mean.pop.prop), NA))
+      allCurves[[NUM]] <- CURVE
+    }
+    names(allCurves) <- names(markovOrder)
+  }
+  
+  if (species == "human") {
+    aparcOrder <- fromJSON(file="../../Data/ParcellationMappings/aparc_order.json")
+    age_sequence <- seq(0, 18, by=increment)
+    allCurves <- list()
+    for (NUM in 1:length(aparcOrder)) {
+      if (!file.exists(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))) {
+        print(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM]), ".rds"))
+        next()
+      }
+      FIT.EXTRACT <- readRDS(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))
+      CURVE <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(log(270),log(365*95),by=0.01), sex = "Female")),
+        expand.grid(list(AgeTransformed = seq(log(270),log(365*95),by=0.01), sex = "Male"))
+        ), 
+        FITParam = FIT.EXTRACT$param
+      )
+      CURVE$AgeTransformed <- exp(CURVE$AgeTransformed)
+      CURVE$Age <- (CURVE$AgeTransformed - 270) / 365
+      CURVE <- CURVE %>%
+        filter(sex == "Male") %>%
+        mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop))
+      CURVE <- CURVE %>%
+        mutate(closest_age = sapply(Age, function(a) age_sequence[which.min(abs(a - age_sequence))])) %>%
+        mutate(closest_age_diff = abs(Age - closest_age)) %>%
+        group_by(closest_age) %>%
+        slice_min(closest_age_diff) %>%
+        ungroup() %>%
+        mutate(PRED.mean.pop.prop.diff = c(diff(PRED.mean.pop.prop), NA))
+      allCurves[[names(aparcOrder)[NUM]]] <- CURVE
+    }
+  }
+  return(allCurves)
+}
+
+macaqueCurves <- getAgeWindow(0.08, "monkey") # 1/12 increment (2 weeks)
+humanCurves <- getAgeWindow(0.24, "human") # 3/12 increment (1 month)
+``` 
+FINAL
+
+```{r}
+## Loading done, now need to map each time point onto the surface for macaque and human
+map2Surface <- function(valsPath, savePrefix, parcellation) {
+  system(paste("python3", "Figure5Scripts/mapToSurface.py", 
+               "--lh-csv", valsPath, 
+               "--rh-csv", valsPath, 
+               "--parcellation", parcellation, 
+               "--save-prefix", savePrefix),
+          wait=TRUE)
+}
+
+mapProportion2Surface <- function(curves, increment, species) {
+  if (species == "monkey") {
+    age_sequence <- seq(0, 6, by=increment)
+    for (NUM in 1:length(age_sequence)) {
+      basePath <- file.path("Figure6Data", "MacaqueTimePoints", age_sequence[NUM])
+      if (!dir.exists(basePath)) {
+        dir.create(basePath)
+      }
+      vals <- lapply(curves, function(X) X$PRED.mean.pop.prop.diff[NUM])
+      vals <- c(0, vals)
+      write.table(vals, file=file.path(basePath, "vals.csv"), col.names = FALSE, row.names = FALSE)
+      map2Surface(file.path(basePath, "vals.csv"), file.path(basePath, "surface"), "markov")
+    }
+  }
+  if (species == "human") {
+    age_sequence <- seq(0, 18, increment)
+    for (NUM in 1:length(age_sequence)) {
+      basePath <- file.path("Figure6Data", "HumanTimePoints", age_sequence[NUM])
+      if (!dir.exists(basePath)) {
+        dir.create(basePath)
+      }
+      vals <- lapply(curves, function(X) X$PRED.mean.pop.prop.diff[NUM])
+      vals <- c(0, vals[1:3], 0, vals[4:length(vals)])
+      write.table(vals, file=file.path(basePath, "vals.csv"), col.names = FALSE, row.names = FALSE)
+      map2Surface(file.path(basePath, "vals.csv"), file.path(basePath, "surface"), "aparc")
+    }
+  }
+}
+
+mapProportion2Surface(macaqueCurves, 0.08, "monkey")
+mapProportion2Surface(humanCurves, 0.24, "human")
+```
+
+```{r}
+## For now, lets just run the neurosynth on the human data only
+runNeurosynthHuman <- function(increment, threshold=NULL) {
+  basePath <- file.path("Figure6Data/MacaqueTimePoints") 
+  age_sequence <- seq(0, 18, by=increment)
+  for (NUM in 1:length(age_sequence)) {
+    basePath <- file.path("Figure6Data/HumanTimePoints", age_sequence[NUM])
+    system(paste("python3", "Figure5Scripts/run_neurosynth.py",
+                 "--lh", file.path(basePath, "surface.lh.func.gii"),
+                 "--rh", file.path(basePath, "surface.rh.func.gii"),
+                 "--output", basePath),
+           wait=TRUE)
+  }
+}
+runNeurosynthHuman(0.24)
+```
+
+```{r}
+## Have to map the macaque versions to human surfaces
+map2human <- function(increment) {
+  wbDir <- "/Applications/workbench/bin_macosx64/wb_command"
+  deformation_spheres <- "/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Atlas/alignment_macaque-human/deformation_macaque-human"
+  human_spheres <- "/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Atlas/alignment_macaque-human/surfaces/Human/32k_fs_LR"
+  age_sequence <- seq(0, 6, increment)
+  for (NUM in 1:length(age_sequence)) {
+    basePath <- file.path("Figure6Data/MacaqueTimePoints", age_sequence[NUM])
+    lh_orig <- file.path(basePath, "surface.lh.func.gii")
+    rh_orig <- file.path(basePath, "surface.rh.func.gii")
+    lh_out <- file.path(basePath, "human.surface.lh.func.gii")
+    rh_out <- file.path(basePath, "human.surface.rh.func.gii")
+    system(paste(wbDir,
+                 "-metric-resample", 
+                 lh_orig,
+                 file.path(deformation_spheres, "L.macaque-to-human.sphere.reg.32k_fs_LR.surf.gii"),
+                 file.path(human_spheres, "sub-MNI152NLin2009cAsym.L.sphere.32k_fs_LR.surf.gii"),
+                 "BARYCENTRIC",
+                 lh_out,
+                 "-largest"),
+           wait=TRUE)
+    system(paste(wbDir,
+                 "-metric-resample",
+                 rh_orig,
+                 file.path(deformation_spheres, "R.macaque-to-human.sphere.reg.32k_fs_LR.surf.gii"),
+                 file.path(human_spheres, "sub-MNI152NLin2009cAsym.R.sphere.32k_fs_LR.surf.gii"),
+                 "BARYCENTRIC",
+                 rh_out,
+                 "-largest"),
+           wait=TRUE)
+  }
+}
+
+map2human(0.08)
+```
+
+
+```{r}
+## Now we have correlations of a bunch of different time points of {n, 2n-1, 3n-1, ...} for humans
+## Lets load all this data into one dataframe
+loadNeurosynthHuman <- function(increment, species) {
+  if (species == "macaque") {
+    age_sequence <- seq(0, 8, by=increment)
+    data_list <- list()
+    for (NUM in 1:length(age_sequence)) {
+      if (!file.exists(file.path("Figure6Data/MacaqueTimePoints", age_sequence[NUM], "terms.filtered.csv"))) {
+        next()
+      }
+      data <- read.csv(file.path("Figure6Data/MacaqueTimePoints", age_sequence[NUM], "terms.filtered.csv"))
+      data$timepoint <- age_sequence[NUM]
+      data$species = "Macaque"
+      data_list[[NUM]] <- data
+    }
+    data_df <- do.call(rbind, data_list)
+    return(data_df)
+  }
+  if (species == "human") {
+    age_sequence <- seq(0, 20, by=increment)
+    data_list <- list()
+    for (NUM in 1:length(age_sequence)) {
+      if (!file.exists(file.path("Figure6Data/HumanTimePoints", age_sequence[NUM], "terms.filtered.csv"))) {
+        next()
+      }
+      data <- read.csv(file.path("Figure6Data/HumanTimePoints", age_sequence[NUM], "terms.filtered.csv"))
+      data$timepoint <- age_sequence[NUM]
+      data$species = "Human"
+      data_list[[NUM]] <- data
+    }
+    data_df <- do.call(rbind, data_list)
+    return(data_df) 
+  }
+}
+
+bindTimepoints <- function(macaque, human) {
+  macaque$timepointProp <- macaque$timepoint / 6
+  human$timepointProp <- human$timepoint / 18
+  df<- rbind(macaque, human)
+  return(df)
+}
+
+humanTimepoints <- loadNeurosynthHuman(0.24, "human")
+macaqueTimepoints <- loadNeurosynthHuman(0.08, "macaque")
+df <- bindTimepoints(macaqueTimepoints, humanTimepoints)
+```
+
+```{r}
+library(ggplot2)
+library(ggridges)
+library(dplyr)
+
+timepoint_df <- df
+
+human_df <- timepoint_df %>%
+  filter(species == "Human")
+
+# Find the peak timepoints for each index
+peak_timepoints <- human_df %>%
+  group_by(index) %>%
+  summarise(peak_timepoint = timepointProp[which.max(Pearson.s.r)])
+
+# Sort the indices based on the peak timepoints
+sorted_index <- peak_timepoints %>%
+  arrange(peak_timepoint) %>%
+  pull(index)
+
+# Reorder the levels of the index variable based on the sorted indices
+timepoint_df$index <- factor(timepoint_df$index, levels = sorted_index)
+
+timepoint_df <- timepoint_df %>%
+  filter(index != "eye movements")
+
+timepoint_breaks <- c(0, 0.06, 0.16, 0.4, 1)
+
+testPlot <- ggplot(timepoint_df, aes(x = timepointProp, y = index, height = Pearson.s.r, fill=species)) +
+  geom_ridgeline(scale=4, alpha=0.5) +
+  geom_hline(yintercept = timepoint_df$index, alpha=0.4) +
+  geom_vline(xintercept = timepoint_breaks, linetype="dashed", color="gray", alpha=0.4) +
+  ylab("") +
+  xlab("") +
+  theme_classic() +
+  scale_x_continuous(
+    breaks = timepoint_breaks,
+    labels = c("Birth", "Infancy", "Toddler", "Childhood", "Adolescence")
+  ) +
+  scale_fill_npg() +
+  ggtitle("Positive Correlation Scores of Topics (no terms-->topic)") +
+  theme(
+    axis.text.x = element_text(hjust=1, angle=45)
+  )
+
+testPlot
+#ggsave(plot=testPlot, file.path("Figure6Data", "humanRidgelinetestMatched.png"), height=10, width=6, dpi=300)
+```
+
+```{r}
+## Okay, now lets try instead to map all the terms (in terms.csv) to specific topics. Then we have a distribution of correlation values across those terms and we can instead plot THOSE on a ridgeplot
+
+loadKeys <- function() {
+  topics_to_keep = c(1, 4, 6, 14, 
+                  18, 19, 23, 25, 
+                  20, 21, 27, 29,
+                  30, 31, 33, 35, 
+                  36, 38, 37, 41, 
+                  44, 45, 48, 49)
+  topics_to_keep <- topics_to_keep + 1
+  labels = c('face/affective processing', ' verbal semantics', 'cued attention', 'working memory', 
+          'autobiographical memory', 'reading', 'inhibition', 'motor', 
+          'visual perception', 'numerical cognition', 'reward-based decision making', 'visual attention', 
+          'multisensory processing', 'visuospatial','eye movements', 'action',
+          'auditory processing', 'pain', 'language', 'declarative memory', 
+          'visual semantics', 'emotion', 'cognitive control', 'social cognition')
+  keys <- read.csv("Figure3Scripts/v3-topics-50-keys.txt", sep = "\t", header = FALSE, row.names = 1)
+  keys <- keys[topics_to_keep, , drop = FALSE]
+  keys$labels <- trimws(labels, "left")
+  colnames(keys) <- c("unknown", "terms", "labels")
+  return(keys)
+}
+
+mapLabels <- function(terms, keys) {
+  ## need to bind the keys to the terms in a new column based on whether or not it contains the word
+  terms$index <- ifelse(terms$index == "affective", "face/affective processing", terms$index)
+  findLabel <- function(term) {
+    matched_label <- keys$labels[str_detect(keys$terms, term)]
+    if (length(matched_label) > 0) {
+      return(matched_label[1])
+    } else if (term %in% keys$terms) {
+      return(term)
+    } else {
+      return(NA)
+    }
+  }
+  terms$label <- sapply(terms$index, findLabel)
+  terms <- terms[complete.cases(terms$label), ]
+  return(terms)
+}
+
+loadAllTerms <- function(increment, species) {
+  if (species == "macaque") {
+    age_sequence <- seq(0, 8, by=increment)
+    data_list <- list()
+    for (NUM in 1:length(age_sequence)) {
+      if (!file.exists(file.path("Figure6Data/MacaqueTimePoints", age_sequence[NUM], "terms.csv"))) {
+        next()
+      }
+      data <- read.csv(file.path("Figure6Data/MacaqueTimePoints", age_sequence[NUM], "terms.csv"))
+      data$timepoint <- age_sequence[NUM]
+      data$species = "Macaque"
+      data_list[[NUM]] <- data
+    }
+    data_df <- do.call(rbind, data_list)
+    return(data_df)
+  }
+  if (species == "human") {
+    age_sequence <- seq(0, 20, by=increment)
+    data_list <- list()
+    for (NUM in 1:length(age_sequence)) {
+      if (!file.exists(file.path("Figure6Data/HumanTimePoints", age_sequence[NUM], "terms.csv"))) {
+        next()
+      }
+      data <- read.csv(file.path("Figure6Data/HumanTimePoints", age_sequence[NUM], "terms.csv"))
+      data$timepoint <- age_sequence[NUM]
+      data$species = "Human"
+      data_list[[NUM]] <- data
+    }
+    data_df <- do.call(rbind, data_list)
+    return(data_df) 
+  }
+}
+
+bindTimepoints <- function(macaque, human) {
+  macaque$timepointProp <- macaque$timepoint / 6
+  human$timepointProp <- human$timepoint / 18 
+  df<- rbind(macaque, human)
+  return(df)
+}
+
+macaqueTerms <- loadAllTerms(0.08, "macaque")
+humanTerms <- loadAllTerms(0.24, "human")
+keys <- loadKeys()
+macaqueMapped <- mapLabels(macaqueTerms, keys)
+humanMapped <- mapLabels(humanTerms, keys)
+allMappedTerms <- bindTimepoints(macaqueMapped, humanMapped)
+```
+
+```{r}
+## now make a distribution plot (this does not take into account the actual values of Pearson.s.r)
+library(ggplot2)
+library(ggridges)
+positiveMappedTerms <- allMappedTerms %>%
+  filter(Pearson.s.r > 0) %>%
+  filter(timepointProp < 1)
+  
+ggplot(positiveMappedTerms, aes(x=timepointProp, y = label, fill = species)) +
+  geom_density_ridges(alpha=0.5) +
+  theme_minimal()
+```
+
+```{r}
+## Try making another plot that summarizes the Pearson.s.r
+summarisePearsonR <- allMappedTerms %>%
+  #filter(Pearson.s.r > 0) %>%
+  filter(timepointProp < 1) %>%
+  group_by(species, timepointProp, label) %>%
+  summarise(Pearson.s.r = mean(Pearson.s.r))
+
+human_df <- summarisePearsonR %>%
+  filter(species == "Human")
+
+# Find the peak timepoints for each index
+peak_timepoints <- human_df %>%
+  group_by(label) %>%
+  summarise(peak_timepoint = timepointProp[which.max(Pearson.s.r)])
+
+# Sort the indices based on the peak timepoints
+sorted_index <- peak_timepoints %>%
+  arrange(peak_timepoint) %>%
+  pull(label)
+
+# Reorder the levels of the index variable based on the sorted indices
+summarisePearsonR$label <- factor(summarisePearsonR$label, levels = sorted_index)
+
+#timepoint_df <- timepoint_df %>%
+#  filter(index != "eye movements")
+
+timepoint_breaks <- c(0, 0.06, 0.16, 0.4, 1)
+
+testPlot <- ggplot(summarisePearsonR, aes(x = timepointProp, y = label, height = Pearson.s.r, fill=species)) +
+  geom_ridgeline(scale=4, alpha=0.5) +
+  geom_hline(yintercept = summarisePearsonR$label, alpha=0.4) +
+  geom_vline(xintercept = timepoint_breaks, linetype="dashed", color="gray", alpha=0.4) +
+  ylab("") +
+  xlab("") +
+  theme_classic() +
+  scale_x_continuous(
+    breaks = timepoint_breaks,
+    labels = c("Birth", "Infancy", "Toddler", "Childhood", "Adolescence")
+  ) +
+  scale_fill_npg() +
+  #ggtitle("Mean Positive Correlation Scores Over Adolescent Development") +
+  theme(
+    axis.text.x = element_text(hjust=1, angle=45),
+    legend.title = element_blank(),
+    axis.text.y = element_text(size=10)
+  )
+
+testPlot
+#ggsave(plot=testPlot, file.path("Figure6Images/ridgelinePlotMeanPositiveCorrelations.png"), width=6, height=8)
+```
+
+```{r}
+## Bar plot that shows average pearson.s.r correlation over the lifespan
+barPlotSummarise <- allMappedTerms %>%
+  #filter(Pearson.s.r > 0) %>%
+  group_by(species, label) %>%
+  summarise(meanPearson = mean(Pearson.s.r), semPearson = sd(Pearson.s.r)/sqrt(n()))
+
+ggplot(data=barPlotSummarise, aes(x=reorder(label, meanPearson), y=meanPearson, fill=species)) +
+  geom_bar(stat="identity", position="dodge") +
+  geom_errorbar(aes(ymin = meanPearson - semPearson, ymax = meanPearson + semPearson), 
+                width = 0.2, # Adjust the width of error bars as needed
+                position = position_dodge(width = 0.9)) +
+  scale_fill_npg() +
+  ylab("Mean Pearson Correlation") +
+  xlab("") +
+  ggtitle("Mean Pearson Correlation of Development Maps Over Lifespan") +
+  ggeasy::easy_center_title() +
+  theme(
+    axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)
+  )
+```
+
+```{r}
+## Make boxplot of the correlation scores
+data <- allMappedTerms %>%
+  filter(Pearson.s.r > 0)
+
+data <- data %>%
+  group_by(label) %>%
+  mutate(mean_Pearson = mean(Pearson.s.r)) %>%
+  ungroup() %>%
+  arrange(desc(mean_Pearson))
+
+plot <- ggplot(data=data, aes(x=reorder(label, mean_Pearson), y=Pearson.s.r, fill=species)) +
+  geom_boxplot() +
+  theme_classic() +
+  scale_fill_npg() +
+  #geom_hline(yintercept=0, linetype="dashed") +
+  ylab("Pearson Correlation") +
+  xlab("") +
+  theme(
+    axis.text.x = element_text(hjust=1, angle=90, size=12)
+  )
+plot
+ggsave(plot=plot, file.path("Figure6Images/Neurosynth_boxplot.png"), width=8, height=4, dpi=300)
+ggsave(plot=plot, file.path("Figure6Images/Neurosynth_boxplot.pdf"), width=8, height=4, dpi=300)
+```
+
+
+```{r}
+## Counting how many terms are mapped to each label for both species
+countMappedLabels <- allMappedTerms %>%
+  group_by(species, label) %>%
+  summarise(termCountProp = n())
+
+ggplot(data=countMappedLabels, aes(x=reorder(label, termCountProp), y=termCountProp, fill=species)) +
+  geom_bar(stat="identity", position="dodge") +
+  theme(
+    axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)
+  ) +
+  ggtitle("Count of terms --> topic matching")
+```
+
+```{r}
+library(patchwork)
+## Plot scatterplots of this instead of mean
+scatterList <- list()
+for (topic in unique(allMappedTerms$label)) {
+  dataframe <- allMappedTerms %>%
+    filter(Pearson.s.r > 0) %>%
+    filter(label == topic)
+  timepoint_breaks <- c(0, 0.06, 0.16, 0.4, 1)
+  
+  smoothed_data <- allMappedTerms %>%
+    filter(label == topic) %>%
+    group_by(species, timepointProp) %>%
+    summarise(mean_Pearson = mean(Pearson.s.r))
+  
+  plot <- ggplot(data=dataframe, aes(x=timepointProp, y=Pearson.s.r, color=species)) +
+    geom_point(alpha=0.1, size=0.4) +
+    geom_smooth(method = "gam", se = FALSE, size=1.5) +
+    #geom_line(data=smoothed_data, aes(x=timepointProp, y=mean_Pearson, color=species), size=1.5) +
+    geom_hline(yintercept=0, linetype="dashed") +
+    ylim(0, NA) +
+    scale_color_npg() +
+    theme_classic() +
+    xlab("Age") +
+    xlim(0, 1) +
+    scale_x_continuous(
+    breaks = timepoint_breaks,
+    labels = c("Birth", "Infancy", "Toddler", "Childhood", "Adolescence")
+  ) +
+    ggtitle(topic) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size=8))
+  scatterList[[topic]] <- plot
+}
+plot <- wrap_plots(scatterList, ncol=4) +
+  plot_layout(axis_titles = "collect", guides = "collect")
+plot
+ggsave(plot=plot, file.path("Figure6Images/patchworkScatterMappedTermsPositiveOnlyAverage.png"), height=10, width=10)
+ggsave(plot=plot, file.path("Figure6Images/patchworkScatterMappedTermsPositiveOnlyAverage.pdf"), height=10, width=10)
+```
+
+```{r}
+## New figure that shows the GAM line as a ridgeline plot
+library(patchwork)
+
+timepoint_breaks <- c(0, 0.06, 0.16, 0.4, 1)
+label_order <- c("motor", "eye movements", "visual perception", "pain", "action", "face/affective processing",
+                 "reading", "visual semantics", "multisensory processing", "visuospatial", "auditory processing",
+                 "visual attention", "language", "cued attention", "inhibition", "working memory", "numerical cognition",
+                 "cognitive control", "declarative memory", "reward-based decision making", "autobiographical memory",
+                 "verbal semantics", "emotion", "social cognition")
+
+df <- allMappedTerms %>%
+  filter(Pearson.s.r > 0)
+
+smoothed_data <- allMappedTerms %>%
+    group_by(species, label, timepointProp) %>%
+    summarise(mean_Pearson = mean(Pearson.s.r))
+
+peakAverageDecoding <- smoothed_data %>%
+  group_by(species, label) %>%
+  filter(mean_Pearson == max(mean_Pearson)) %>%
+  filter(species == "Human") %>%
+  arrange(timepointProp)
+
+df$label <- factor(df$label, levels = peakAverageDecoding$label)
+smoothed_data$label <- factor(smoothed_data$label, peakAverageDecoding$label)
+
+peakAverageDecoding <- smoothed_data %>%
+  group_by(species, label) %>%
+  filter(mean_Pearson == max(mean_Pearson))
+
+plot <- ggplot(data = df, aes(x = timepointProp, y = Pearson.s.r, color = species)) +
+  geom_point(alpha=0.1, size=0.4) +
+  #geom_smooth(method = "gam", se = FALSE, size = 1.5) +
+  geom_line(data=smoothed_data, aes(x=timepointProp, y=mean_Pearson, color=species), size=1.5) +
+  geom_point(data=peakAverageDecoding, aes(x=timepointProp, y=mean_Pearson, color=species), size=3) +
+  facet_wrap(label ~ ., scales = "free_y", ncol=1) +
+  geom_hline(yintercept = 0) +
+  theme_classic() +
+  scale_color_npg() +
+  geom_vline(xintercept = timepoint_breaks, linetype="dashed", color="gray", alpha=0.7) +
+  scale_x_continuous(
+    breaks = timepoint_breaks,
+    labels = c("Birth", "Infancy", "Toddler", "Childhood", "Adolescence")
+  ) +
+  xlab("") +
+  ylab("Pearson Correlation") +
+  ylim(0, 0.3) +
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_blank(),
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(hjust=1, angle=45, size=12),
+    legend.title = element_blank(),
+    legend.text = element_text(size=16),
+    axis.title.y = element_text(size=16)
+    )
+plot
+
+ggsave(plot=plot, file.path("Figure6Images/GAMFitsStacked.png"), height=14, width=6, dpi=400)
+```
+
+```{r}
+## Want to have a look at the peaks of the correlation trajectories between human and macaque
+peakAverageDecoding <- smoothed_data %>%
+  group_by(species, label) %>%
+  filter(mean_Pearson == max(mean_Pearson))
+
+ggplot(data=peakAverageDecoding, aes(x=label, y=timepointProp, fill=species)) +
+  geom_bar(stat="identity", position="dodge") +
+  theme(
+    axis.text.x = element_text(angle=45, hjust=1)
+  )
+```
+
+
+
+
+```{r}
+## I want to see which terms mapped to each topic have the largest difference between humans and macaques
+## First summarise the dataframe
+library(tidyr)
+differenceCurves <- allMappedTerms %>%
+  filter(Pearson.s.r > 0) %>%
+  group_by(species, label, index) %>%
+  summarise(meanIndexPearson = mean(Pearson.s.r))
+  
+differenceCurves <- differenceCurves %>%
+  pivot_wider(names_from = species, values_from = meanIndexPearson) %>%
+  mutate(diff_human_macaque = abs(Human - Macaque)) %>%
+  group_by(label) %>%
+  filter(diff_human_macaque == max(diff_human_macaque, na.rm = TRUE))
+
+```
+
+```{r}
+## I want to generate surface maps of the correlation maps
+basePath <- "Figure5Scripts/data/external/neurosynth-data-master"
+mappingTerms2Topics <- allMappedTerms %>%
+  select(label, index) %>%
+  distinct()
+
+loadPaths <- function(basePath, mapping) {
+  allData <- list()
+  for (topic in unique(mapping$label)) {
+    dataframe <- mapping %>%
+      filter(label == topic)
+    allData[[topic]] <- list()
+    for (term in unique(dataframe$index)) {
+      pat <- paste0("_", term, "_z")
+      path <- list.files(basePath, pattern = paste0("*", pat, "*"), full.names = TRUE)
+      allData[[topic]][[term]] <- path
+    }
+  }
+  return(allData)
+}
+
+paths <- loadPaths(basePath, mappingTerms2Topics)
+```
+
+```{r}
+## Now I have to average all of the volumes, then map into surface space
+averageVolumes <- function(paths) {
+  for (NUM in 1:length(paths)) {
+    new_dir_name <- gsub("/", "_", names(paths)[NUM])
+    new_dir_name <- gsub(" ", "_", new_dir_name)
+    if (!dir.exists(file.path("Figure6Data/NeurosynthSurfaces", new_dir_name))) {
+      dir.create(file.path("Figure6Data/NeurosynthSurfaces", new_dir_name))
+    }
+    topicPaths <- sapply(paths[[NUM]], function(X) X)
+    pathNum <- length(topicPaths)
+    fslmaths_command <- paste("fslmaths", paste0('"', topicPaths, '"', collapse = " -add "), "-div", pathNum, file.path("Figure6Data/NeurosynthSurfaces", new_dir_name, "averageVolume.nii.gz"))
+    system(fslmaths_command, wait=TRUE)
+    ## Now we gotta split into left and right
+    system(paste("fslmaths",
+                   file.path("Figure6Data/NeurosynthSurfaces", new_dir_name, "averageVolume.nii.gz"),
+                   "-mul",
+                   file.path("../../Atlas/MNI/MNI152_T1_2mm_brain_mask_left.nii.gz"),
+                   file.path("Figure6Data/NeurosynthSurfaces", new_dir_name, "averageVolume.lh.nii.gz")),
+             wait=TRUE)
+    system(paste("fslmaths",
+                   file.path("Figure6Data/NeurosynthSurfaces", new_dir_name, "averageVolume.nii.gz"),
+                   "-mul",
+                   file.path("../../Atlas/MNI/MNI152_T1_2mm_brain_mask_right.nii.gz"),
+                   file.path("Figure6Data/NeurosynthSurfaces", new_dir_name, "averageVolume.rh.nii.gz")),
+             wait=TRUE)
+  }
+}
+
+mapVolume2Surface <- function(paths) {
+  wbDir <- "/Applications/workbench/bin_macosx64/wb_command"
+  surfDir <- "../../Atlas/surfaces/human"
+  for (NUM in 1:length(paths)) {
+    new_dir_name <- gsub("/", "_", names(paths)[NUM])
+    new_dir_name <- gsub(" ", "_", new_dir_name)
+    volume_path <- file.path("Figure6Data/NeurosynthSurfaces", new_dir_name)
+    cmd_lh <- paste(wbDir, "-volume-to-surface-mapping", 
+                 file.path(volume_path, "averageVolume.lh.nii.gz"), 
+                 file.path(surfDir, "32k_fs_LR/sub-MNI152NLin2009cAsym.L.midthickness.32k_fs_LR.surf.gii"),
+                 file.path(volume_path, "averageVolume.lh.func.gii"),
+                 "-trilinear")
+    cmd_rh <- paste(wbDir, "-volume-to-surface-mapping", 
+                 file.path(volume_path, "averageVolume.rh.nii.gz"), 
+                 file.path(surfDir, "32k_fs_LR/sub-MNI152NLin2009cAsym.R.midthickness.32k_fs_LR.surf.gii"),
+                 file.path(volume_path, "averageVolume.rh.func.gii"),
+                 "-trilinear")
+    system(cmd_lh, wait=TRUE)
+    system(cmd_rh, wait=TRUE)
+  }
+}
+
+#averageVolumes(paths)
+mapVolume2Surface(paths)
+```
+
+```{r}
+## Just make the surface maps from the individual topic maps
+loadTopicPaths <- function() {
+  labels = c('affective', 'semantics', 'attention', 'working memory', 
+          'autobiographical memory', 'reading', 'inhibition', 'motor', 
+          'visual perception', 'numerical', 'decision making', 'visual attention', 
+          'multisensory', 'visuospatial','eye movements', 'action',
+          'auditory', 'pain', 'language', 'recognition memory', 
+          'visual stream', 'emotion', 'cognitive control', 'social cognition')
+  paths <- list()
+  for (label in labels) {
+    pat <- paste0("_", label, "_z")
+    path <- list.files(basePath, pattern = paste0("*", pat, "*"), full.names = TRUE)
+    paths[[label]] <- path
+  }
+  return(paths)
+}
+
+## Function to split the data into lh and rh and threshold each
+splitData <- function(paths) {
+  wbDir <- "/Applications/workbench/bin_macosx64/wb_command"
+  surfDir <- "../../Atlas/surfaces/human"
+  for (NUM in 1:length(paths)) {
+    new_dir_name <- gsub("/", "_", names(paths)[NUM])
+    new_dir_name <- gsub(" ", "_", new_dir_name)
+    volumePath <- file.path("Figure6Data/NeurosynthSurfaces/topicSurfaces", new_dir_name)
+    if (!dir.exists(volumePath)) {
+      dir.create(volumePath)
+    }
+    system(paste("fslmaths",
+                   paste0('"', paths[[NUM]], '"'),
+                   "-mul",
+                   file.path("../../Atlas/MNI/MNI152_T1_2mm_brain_mask_left.nii.gz"),
+                   file.path(volumePath, "activationMap.lh.nii.gz")),
+             wait=TRUE)
+    system(paste("fslmaths",
+                   paste0('"', paths[[NUM]], '"'),
+                   "-mul",
+                   file.path("../../Atlas/MNI/MNI152_T1_2mm_brain_mask_right.nii.gz"),
+                   file.path(volumePath, "activationMap.rh.nii.gz")),
+             wait=TRUE)
+    ## Threshold the data some other time
+  }
+}
+
+mapVolume2Surface <- function(paths) {
+  wbDir <- "/Applications/workbench/bin_macosx64/wb_command"
+  surfDir <- "../../Atlas/surfaces/human"
+  for (NUM in 1:length(paths)) {
+    new_dir_name <- gsub("/", "_", names(paths)[NUM])
+    new_dir_name <- gsub(" ", "_", new_dir_name)
+    volume_path <- file.path("Figure6Data/NeurosynthSurfaces/topicSurfaces", new_dir_name)
+    cmd_lh <- paste(wbDir, "-volume-to-surface-mapping", 
+                 file.path(volume_path, "activationMap.lh.nii.gz"), 
+                 file.path(surfDir, "32k_fs_LR/sub-MNI152NLin2009cAsym.L.midthickness.32k_fs_LR.surf.gii"),
+                 file.path(volume_path, "activationMap.lh.func.gii"),
+                 "-trilinear")
+    cmd_rh <- paste(wbDir, "-volume-to-surface-mapping", 
+                 file.path(volume_path, "activationMap.rh.nii.gz"), 
+                 file.path(surfDir, "32k_fs_LR/sub-MNI152NLin2009cAsym.R.midthickness.32k_fs_LR.surf.gii"),
+                 file.path(volume_path, "activationMap.rh.func.gii"),
+                 "-trilinear")
+    system(cmd_lh, wait=TRUE)
+    system(cmd_rh, wait=TRUE)
+  }
+}
+
+topicPaths <- loadTopicPaths()
+#splitData(topicPaths)
+mapVolume2Surface(topicPaths)
+```
+
+```{r}
+## Make "cumulative" plot of added positive R correlation over the lifespan
+summarisePearsonR <- allMappedTerms %>%
+  mutate(Pearson.s.r = ifelse(Pearson.s.r < 0, 0, Pearson.s.r)) %>%
+  #filter(Pearson.s.r > 0) %>%
+  filter(timepointProp < 1) %>%
+  group_by(species, timepointProp, label) %>%
+  summarise(Pearson.s.r = mean(Pearson.s.r))
+
+## Now add them together over the lifespan
+cumulativePearsonR <- summarisePearsonR %>%
+  arrange(species, label, timepointProp) %>%
+  group_by(species, label) %>%
+  mutate(cumulative_Pearson = cumsum(Pearson.s.r))
+
+## Now make a lineplot function
+linePlotTopics <- function(data, type) {
+  plotting_df <- data %>%
+    filter(species == type)
+  
+  plot <- ggplot(data=data, aes(x=timepointProp, y=label, height=cumulative_Pearson, color=species)) +
+    geom_ridgeline(alpha=0.4, scale=0.2, fill=NA) +
+    geom_hline(yintercept = summarisePearsonR$label) +
+    theme_classic() +
+    ylab("Cumulative Pearson Score (positive only)")
+  
+  return(plot)
+}
+
+p <- linePlotTopics(cumulativePearsonR, "Macaque")
+ggsave(plot=p, file.path("Figure6Images/CumulativePearson.png"), width=6, height=8)
+```
+
+Now I want to get a heatmap plot of all the growth rates, sorted by the contribution of the region to the principal component.
+
+Start by just making a heatmap of the growth rates at each timepoint, then we can worry about how to sort it
+
+```{r}
+## macaqueCurves and humanCurves has all the info in PRED.mean.pop.prop.diff
+library(scales)
+
+humanData <- as.data.frame(na.omit(sapply(humanCurves, function(X) X$PRED.mean.pop.prop.diff)))
+humanData$timepointProp <- unique(humanTerms$timepoint) / 18
+macaqueData <- as.data.frame(na.omit(sapply(macaqueCurves, function(X) X$PRED.mean.pop.prop.diff)))
+macaqueData$timepointProp <- unique(macaqueTerms$timepoint) / 6
+
+humanData <- melt(humanData, id.vars = "timepointProp")
+macaqueData <- melt(macaqueData, id.vars = "timepointProp")
+
+humanPlot <- ggplot(data=humanData, aes(x=timepointProp, y=variable, fill=value)) +
+  geom_tile() +
+  scale_fill_gradient(low="blue", high="red", limits = c(-0.02, 0.02), oob=squish) +
+  theme_classic()
+macaquePlot <- ggplot(data=macaqueData, aes(x=timepointProp, y=variable, fill=value)) +
+  geom_tile() +
+  scale_fill_gradient(low="blue", high="red", limits = c(-0.02, 0.02), oob=squish) +
+  theme_classic()
+
+macaquePlot
+humanPlot
+```
+```{r}
+## Now I need to sort it by the first principal component of the human data
+gradientValuesLH <- read.csv("Figure6Data/gradientAparc/lh_gradient_aparc.txt", header=FALSE)
+gradientValuesRH <- read.csv("Figure6Data/gradientAparc/rh_gradient_aparc.txt", header=FALSE)
+```
+
+FORGET THIS FOR NOW... dont associate with principal gradient
+
+Lets summarize the development into the Mesulam cytoarchitecture for both human and macaque
+
+```{r}
+## Loop the script "mapParcellation2Cytoarchitecture.py"
+humanCytoLoop <- function(increment) {
+  age_sequence <- seq(0, 18, by=increment)
+  for (NUM in 1:length(age_sequence)) {
+    basePath <- file.path("Figure6Data/HumanTimePoints", age_sequence[NUM])
+    if (!file.exists(file.path(basePath, "surface.lh.func.gii")) || !file.exists(file.path(basePath, "surface.rh.func.gii"))) {
+      next
+    } else {
+      cmd <- paste("python3",
+                   "Figure3Scripts/mapParcellation2Cryoarchitecture.py",
+                   "--lh-path", file.path(basePath, "surface.lh.func.gii"),
+                   "--rh-path", file.path(basePath, "surface.rh.func.gii"),
+                   "--surface", "aparc",
+                   "--parcellation", "mesulam",
+                   "--save-prefix", file.path(basePath, "mesulam-mapping"))
+      system(cmd, wait=TRUE)
+    }
+  }
+}
+
+macaqueCytoLoop <- function(increment) {
+  age_sequence <- seq(0, 6, by=increment)
+  for (NUM in 1:length(age_sequence)) {
+    basePath <- file.path("Figure6Data/MacaqueTimePoints", age_sequence[NUM])
+    if (!file.exists(file.path(basePath, "human.surface.lh.func.gii")) || !file.exists(file.path(basePath, "human.surface.rh.func.gii"))) {
+      next
+    } else {
+      cmd <- paste("python3",
+                   "Figure3Scripts/mapParcellation2Cryoarchitecture.py",
+                   "--lh-path", file.path(basePath, "surface.lh.func.gii"),
+                   "--rh-path", file.path(basePath, "surface.rh.func.gii"),
+                   "--surface", "markov",
+                   "--parcellation", "mesulam",
+                   "--save-prefix", file.path(basePath, "mesulam-mapping"))
+      system(cmd, wait=TRUE)
+    }
+  }
+}
+humanCytoLoop(0.24)
+macaqueCytoLoop(0.08)
+```
+
+```{r}
+## Now load in the data as a LIST
+loadMapping <- function(species, increment) {
+  if (species == "human") {
+    age_sequence <- seq(0, 18, by=increment)
+    data_list <- list()
+    for (NUM in 1:length(age_sequence)) {
+      basePath <- file.path("Figure6Data/HumanTimePoints", age_sequence[NUM])
+      if (!file.exists(file.path(basePath, "7Network-mapping.L.csv")) || !file.exists(file.path(basePath, "7Network-mapping.R.csv"))) {
+        next
+      } else {
+        data_list[[NUM]] <- list()
+        data_list[[NUM]][["L"]] <- read.csv(file.path(basePath, "7Network-mapping.L.csv"), header=FALSE)
+        data_list[[NUM]][["R"]] <- read.csv(file.path(basePath, "7Network-mapping.R.csv"), header=FALSE)
+      }
+    }
+    names(data_list) <- age_sequence
+  } else if (species == "macaque") {
+    age_sequence <- seq(0, 6, by=increment)
+    data_list <- list()
+    for (NUM in 1:length(age_sequence)) {
+      basePath <- file.path("Figure6Data/MacaqueTimePoints", age_sequence[NUM])
+      if (!file.exists(file.path(basePath, "7Network-mapping.L.csv")) || !file.exists(file.path(basePath, "7Network-mapping.R.csv"))) {
+        next
+      } else {
+        data_list[[NUM]] <- list()
+        data_list[[NUM]][["L"]] <- read.csv(file.path(basePath, "7Network-mapping.L.csv"), header=FALSE)
+        data_list[[NUM]][["R"]] <- read.csv(file.path(basePath, "7Network-mapping.R.csv"), header=FALSE)
+      }
+    }
+    names(data_list) <- age_sequence
+  } 
+  return(data_list)
+}
+
+macaque7NetworkList <- loadMapping("macaque", 0.08)
+human7NetworkList <- loadMapping("human", 0.24)
+```
+
+```{r}
+## Extract and average the values for left and right
+humanData <- as.data.frame(t(as.data.frame(sapply(humanMesulamList, function(X) X$L))))
+humanData <- humanData[, -1]
+colnames(humanData) <- c("Paralimbic", "High-order Association", "Modality-specific Association", "Idiotypic (primary)")
+humanData$timepoints <- seq(0, 18, 0.24)
+humanData <- melt(humanData, id.vars = "timepoints")
+
+macaqueData <- as.data.frame(t(as.data.frame(sapply(macaqueMesulamList, function(X) X$L))))
+macaqueData <- macaqueData[, -1]
+colnames(macaqueData) <- c("Paralimbic", "High-order Association", "Modality-specific Association", "Idiotypic (primary)")
+macaqueData$timepoints <- seq(0, 6, by=0.08)
+macaqueData <- melt(macaqueData, id.vars = "timepoints")
+
+ggplot(data=humanData, aes(x=timepoints, y=value, color=variable)) +
+  geom_line() +
+  scale_color_npg() +
+  theme_classic()
+ggplot(data=macaqueData, aes(x=timepoints, y=value, color=variable)) +
+  geom_line() +
+  scale_color_npg() +
+  theme_classic()
+```
+
+```{r}
+## Bind Human and Macaque data and show plots for each
+humanData$species <- "Human"
+humanData$timepointProp <- humanData$timepoints / 18
+macaqueData$species <- "Macaque"
+macaqueData$timepointProp <- macaqueData$timepoints / 6
+
+allData <- rbind(humanData, macaqueData)
+p_list <- list()
+network_list <- c("Paralimbic", "High-order Association", "Modality-specific Association", "Idiotypic (primary)")
+for (NUM in 1:length(network_list)) {
+  p_data <- allData %>%
+    filter(variable == network_list[NUM])
+  p <- ggplot(data=p_data, aes(x=timepointProp, y=value, color=species)) +
+    geom_line(size=1.5) +
+    scale_color_npg() +
+    theme_classic() +
+    scale_x_continuous(
+      breaks = timepoint_breaks,
+      labels = c("Birth", "Infancy", "Toddler", "Childhood", "Adolescence")
+    ) +
+    geom_vline(xintercept = timepoint_breaks, linetype="dashed", color="gray", alpha=0.4) +
+    theme(
+      axis.text.x = element_text(hjust=1, angle=45)
+    ) +
+    xlab("") +
+    ylab("Development Rate") +
+    ggtitle(network_list[NUM])
+  p_list[[NUM]] <- p
+}
+
+p_all <- wrap_plots(p_list, ncol = 2) +
+  plot_layout(
+    guides = "collect",
+    axis_titles = "collect"
+  )
+ggsave(plot=p_all, file.path("Figure6Images/NetworkDevelopmentRate.png"), width=7, height=4, dpi=400)
+p_all
+```
+
+```{r}
+## Cumulative development
+cumulativeNetwork <- allData %>%
+  arrange(species, variable, timepointProp) %>%
+  group_by(species, variable) %>%
+  mutate(cumulativeValue = cumsum(value))
+
+p_list <- list()
+network_list <- c("Paralimbic", "High-order Association", "Modality-specific Association", "Idiotypic (primary)")
+for (NUM in 1:length(network_list)) {
+  p_data <- cumulativeNetwork %>%
+    filter(variable == network_list[NUM])
+  p <- ggplot(data=p_data, aes(x=timepointProp, y=cumulativeValue, color=species)) +
+    geom_line(size=1.5) +
+    scale_color_npg() +
+    theme_classic() +
+    scale_x_continuous(
+      breaks = timepoint_breaks,
+      labels = c("Birth", "Infancy", "Toddler", "Childhood", "Adolescence")
+    ) +
+    geom_vline(xintercept = timepoint_breaks, linetype="dashed", color="gray", alpha=0.4) +
+    theme(
+      axis.text.x = element_text(hjust=1, angle=45)
+    ) +
+    xlab("") +
+    ylab("Cumulative Development") +
+    ggtitle(network_list[NUM])
+  p_list[[NUM]] <- p
+}
+
+p_all <- wrap_plots(p_list, ncol = 2) +
+  plot_layout(
+    guides = "collect",
+    axis_titles = "collect"
+  )
+ggsave(plot=p_all, file.path("Figure6Images/NetworkDevelopmentRateSummed.png"), width=7, height=4, dpi=400)
+p_all
+```
+
+```{r}
+## 7Network
+humanData <- as.data.frame(t(as.data.frame(sapply(human7NetworkList, function(X) X$L))))
+humanData <- humanData[, -1]
+colnames(humanData) <- c("Default1", "Somatomotor", "Auditory", "Limbic", "DorsalAtt", "Visual", "Insular-Opecular")
+humanData$timepoints <- seq(0, 18, 0.24)
+humanData <- melt(humanData, id.vars = "timepoints")
+
+macaqueData <- as.data.frame(t(as.data.frame(sapply(macaque7NetworkList, function(X) X$L))))
+macaqueData <- macaqueData[, -1]
+colnames(macaqueData) <- c("Default1", "Somatomotor", "Auditory", "Limbic", "DorsalAtt", "Visual", "Insular-Opecular")
+macaqueData$timepoints <- seq(0, 6, by=0.08)
+macaqueData <- melt(macaqueData, id.vars = "timepoints")
+
+ggplot(data=humanData, aes(x=timepoints, y=value, color=variable)) +
+  geom_line() +
+  scale_color_npg() +
+  theme_classic()
+ggplot(data=macaqueData, aes(x=timepoints, y=value, color=variable)) +
+  geom_line() +
+  scale_color_npg() +
+  theme_classic()
+```
+```{r}
+humanData$species <- "Human"
+humanData$timepointProp <- humanData$timepoints / 18
+macaqueData$species <- "Macaque"
+macaqueData$timepointProp <- macaqueData$timepoints / 6
+
+allData <- rbind(humanData, macaqueData)
+p_list <- list()
+network_list <- c("Default1", "Somatomotor", "Auditory", "Limbic", "DorsalAtt", "Visual", "Insular-Opecular")
+for (NUM in 1:length(network_list)) {
+  p_data <- allData %>%
+    filter(variable == network_list[NUM])
+  p <- ggplot(data=p_data, aes(x=timepointProp, y=value, color=species)) +
+    geom_line(size=1.5) +
+    scale_color_npg() +
+    theme_classic() +
+    scale_x_continuous(
+      breaks = timepoint_breaks,
+      labels = c("Birth", "Infancy", "Toddler", "Childhood", "Adolescence")
+    ) +
+    geom_vline(xintercept = timepoint_breaks, linetype="dashed", color="gray", alpha=0.4) +
+    theme(
+      axis.text.x = element_text(hjust=1, angle=45)
+    ) +
+    xlab("") +
+    ylab("Development Rate") +
+    ggtitle(network_list[NUM])
+  p_list[[NUM]] <- p
+}
+
+p_all <- wrap_plots(p_list, ncol = 1) +
+  plot_layout(
+    guides = "collect",
+    axis_titles = "collect"
+  )
+ggsave(plot=p_all, file.path("Figure6Images/7NetworkDevelopmentRate.png"), width=4, height=8, dpi=400)
+p_all
+```
+```{r}
+cumulativeNetwork <- allData %>%
+  arrange(species, variable, timepointProp) %>%
+  group_by(species, variable) %>%
+  mutate(cumulativeValue = cumsum(value)) %>%
+  mutate(logTimepoints = log(timepoints))
+
+p_list <- list()
+network_list <- c("Default1", "Somatomotor", "Auditory", "Limbic", "DorsalAtt", "Visual", "Insular-Opecular")
+for (NUM in 1:length(network_list)) {
+  p_data <- cumulativeNetwork %>%
+    filter(variable == network_list[NUM])
+  p <- ggplot(data=p_data, aes(x=timepointProp, y=cumulativeValue, color=species)) +
+    geom_line(size=1.5) +
+    scale_color_npg() +
+    theme_classic() +
+    scale_x_continuous(
+      breaks = timepoint_breaks,
+      labels = c("Birth", "Infancy", "Toddler", "Childhood", "Adolescence")
+    ) +
+    geom_vline(xintercept = timepoint_breaks, linetype="dashed", color="gray", alpha=0.4) +
+    theme(
+      axis.text.x = element_text(hjust=1, angle=45)
+    ) +
+    xlab("") +
+    ylab("Cumulative Development") +
+    ggtitle(network_list[NUM])
+  p_list[[NUM]] <- p
+}
+
+p_all <- wrap_plots(p_list, ncol = 4) +
+  plot_layout(
+    guides = "collect",
+    axis_titles = "collect"
+  )
+ggsave(plot=p_all, file.path("Figure6Images/7NetworkDevelopmentRateSummed.png"), width=7, height=4, dpi=400)
+p_all
+```
+
+```{r}
+## Now split into human and macaque
+human_7network_plot <- ggplot(data=subset(cumulativeNetwork, species=="Human"), aes(x=timepointProp, y=cumulativeValue, color=variable)) +
+  geom_line(size=1.5) +
+  scale_color_npg() +
+  theme_classic() +
+  scale_x_continuous(
+      breaks = timepoint_breaks,
+      labels = c("Birth", "Infancy", "Toddler", "Childhood", "Adolescence")
+    ) +
+    geom_vline(xintercept = timepoint_breaks, linetype="dashed", color="gray", alpha=0.4) +
+    theme(
+      axis.text.x = element_text(hjust=1, angle=45),
+      legend.title = element_blank()
+    ) +
+    xlab("") +
+    ggtitle("Human") +
+    ggeasy::easy_center_title() +
+    ylab("Cumulative Development")
+
+macaque_7network_plot <- ggplot(data=subset(cumulativeNetwork, species=="Macaque"), aes(x=timepointProp, y=cumulativeValue, color=variable)) +
+  geom_line(size=1.5) +
+  scale_color_npg() +
+  theme_classic() +
+  scale_x_continuous(
+      breaks = timepoint_breaks,
+      labels = c("Birth", "Infancy", "Toddler", "Childhood", "Adolescence")
+    ) +
+    geom_vline(xintercept = timepoint_breaks, linetype="dashed", color="gray", alpha=0.4) +
+    theme(
+      axis.text.x = element_text(hjust=1, angle=45),
+      legend.title = element_blank()
+    ) +
+    xlab("") +
+    ggtitle("Macaque") +
+    ggeasy::easy_center_title() +
+    ylab("Cumulative Development")
+
+p <- human_7network_plot + macaque_7network_plot +
+  plot_layout(
+    guides = "collect",
+    axis_titles = "collect"
+  )
+p
+ggsave(plot=p, file.path("Figure6Images/7NetworksCumulativeMacaqueHuman.png"), width=10, height=4, dpi=400)
+```
+
+```{r}
+## Instead of doing the cumulative sum of the growth rates, just sum the trajectories associated with each network, get the maximum, make the new trajectory a proportion of that maximum
+## Start with 7networks
+macaque_mapping <- as.vector(read.csv("Figure6Data/MacaqueTimePoints/0/7Network-mapping.mapping.L.csv", header=TRUE)[, 1])
+human_mapping <- as.vector(read.csv("Figure6Data/HumanTimePoints/0/7Network-mapping.mapping.L.csv", header=TRUE)[, 1])
+human_mapping <- human_mapping[-4]
+## Get a list of macaque and human with each element being PRED.mean.pop
+macaque_list <- lapply(macaqueCurves, function(X) X$PRED.mean.pop)
+human_list <- lapply(humanCurves, function(X) X$PRED.mean.pop)
+
+macaque_sums <- tapply(seq_along(macaque_list), macaque_mapping, function(indices) {
+  Reduce(`+`, macaque_list[indices])
+})
+human_sums <- tapply(seq_along(human_list), human_mapping, function(indices) {
+  Reduce(`+`, human_list[indices])
+})
+
+macaque_sums <- macaque_sums[2:8]
+names(macaque_sums) <- c("Visual", "Somatomotor", "Dorsal Attention", "Ventral Attention", "Limbic", "Frontoparietal", "Default")
+names(human_sums) <- c("Visual", "Somatomotor", "Dorsal Attention", "Ventral Attention", "Limbic", "Frontoparietal", "Default")
+
+macaque_sums <- lapply(macaque_sums, function(X) {
+  X <- as.data.frame(X)
+  X$Age <- macaqueCurves$somatosensory.area.1$Age
+  X$AgeTransformed <- macaqueCurves$somatosensory.area.1$AgeTransformed
+  X$LogAge <- log(X$AgeTransformed)
+  X <- X %>%
+    mutate(PRED.mean.pop.prop = X / max(X)) 
+  return(X)
+  })
+
+human_sums <- lapply(human_sums, function(X) {
+  X <- as.data.frame(X)
+  X <- X %>%
+    mutate(PRED.mean.pop.prop = X / max(X))
+  X$Age <- humanCurves$bankssts$Age
+  X$LogAge <- humanCurves$bankssts$AgeTransformed
+  return(X)
+  })
+for (i in seq_along(macaque_sums)) {
+  macaque_sums[[i]]$Network <- names(macaque_sums)[i]
+  human_sums[[i]]$Network <- names(human_sums)[i]
+}
+macaque_df <- do.call(rbind, macaque_sums)
+human_df <- do.call(rbind, human_sums)
+macaque_df <- macaque_df %>%
+  group_by(Age) %>%
+  mutate(mean = mean(PRED.mean.pop.prop)) %>%
+  mutate(PRED.demeaned.pop.prop = PRED.mean.pop.prop - mean)
+human_df <- human_df %>%
+  group_by(Age) %>%
+  mutate(mean = mean(PRED.mean.pop.prop)) %>%
+  mutate(PRED.demeaned.pop.prop = PRED.mean.pop.prop - mean)
+```
+
+```{r}
+human_7network_plot <- ggplot(data=human_df, aes(x=LogAge, y=PRED.mean.pop.prop, color=Network)) +
+  geom_line(size=1.5) +
+  geom_point(data=human_peak_df, aes(x=LogAge, y=PRED.mean.pop.prop, color=Network), size=3, alpha=0.8) + 
+  scale_color_npg() +
+  theme_classic() +
+  scale_x_continuous(
+      breaks=c(log(270), log(635), log(1365), log(2460), log(4650), log(6840), log(14870), log(22170)),
+      labels=c("Birth", "1yr", "3yr", "6yr", "12yr", "18yr", "40yr", "60yr"),
+      expand=c(0, 0)
+    ) +
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+  geom_vline(xintercept=log(635), alpha=0.7, color="gray", linetype="dashed") +
+  geom_vline(xintercept=log(1365), alpha=0.7, color="gray", linetype="dashed") +
+  geom_vline(xintercept=log(2460), alpha=0.7, color="gray", linetype="dashed") +
+  geom_vline(xintercept=log(4650), alpha=0.7, color="gray", linetype="dashed") +
+  geom_vline(xintercept=log(6840), alpha=0.7, color="gray", linetype="dashed") +
+  geom_vline(xintercept=log(14870), alpha=0.7, color="gray", linetype="dashed") +
+  geom_vline(xintercept=log(22170), alpha=0.7, color="gray", linetype="dashed") +
+  #geom_hline(yintercept = 0) +
+  #ylim(0.2, 1) +
+  theme(
+    axis.text.x = element_text(size=12),
+    legend.title = element_blank(),
+    legend.position = "none"
+  ) +
+  xlab("") +
+  ggtitle("Human") +
+  #ggeasy::easy_center_title() +
+  ylab("Proportion of Maximum Volume")
+
+macaque_7network_plot <- ggplot(data=macaque_df, aes(x=LogAge, y=PRED.mean.pop.prop, color=Network)) +
+  geom_line(size=1.5) +
+  geom_point(data=macaque_peak_df, aes(x=LogAge, y=PRED.mean.pop.prop, color=Network), size=3, alpha=0.8) + 
+  scale_color_npg() +
+  theme_classic() +
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+  scale_x_continuous(
+      breaks = c(log((constant)), log((4 / 12) + constant), log((1) + constant), log((2) + constant), log((3) + constant), log((6) + constant), log((15) + constant), log((25) + constant)),
+      labels = c("Birth", "4m", "1yr", "2yr", "3yr", "6yr", "15yr", "25yr"),
+      expand=c(0, 0)) +
+  geom_vline(xintercept = log((4/12) + constant), alpha = 0.7, color = "gray", linetype="dashed") +
+  geom_vline(xintercept = log((1) + constant), alpha = 0.7, color = "gray", linetype="dashed") +
+  geom_vline(xintercept = log((2) + constant), alpha = 0.7, color = "gray", linetype="dashed") +
+  geom_vline(xintercept = log((3) + constant), alpha = 0.7, color = "gray", linetype="dashed") +
+  geom_vline(xintercept = log((6) + constant), alpha = 0.7, color = "gray", linetype="dashed") +
+  geom_vline(xintercept = log((15) + constant), alpha = 0.7, color = "gray", linetype="dashed") +
+  geom_vline(xintercept = log((25) + constant), alpha = 0.7, color = "gray", linetype="dashed") +
+  #geom_hline(yintercept = 0) +
+  #ylim(0.6, 1) +
+  theme(
+    axis.text.x = element_text(size=12),
+    legend.title = element_blank(),
+    legend.position = "none"
+  ) +
+  xlab("") +
+  ggtitle("Macaque") +
+  #ggeasy::easy_center_title() +
+  ylab("Proportion of Maximum Volume")
+
+p <- human_7network_plot / macaque_7network_plot +
+  theme(legend.position = "bottom") +
+  plot_layout(
+    #guides = "collect",
+    axis_titles = "collect"
+  )
+p
+#ggsave(plot=p, file.path("Figure6Images/MesulamDevelopmentFromTrajectories.png"), width=8, height=5, dpi=400)
+```
+
+```{r}
+## Split 7 networks into own plots and plot
+macaque_df$species <- "Macaque"
+macaque_df$prop_age <- macaque_df$Age / 25
+macaque_df$log_prop_age <- log(macaque_df$prop_age+0.02)
+human_df$species <- "Human"
+human_df$prop_age <- human_df$Age / 80
+human_df$log_prop_age <- log(human_df$prop_age+0.02)
+all_df <- rbind(macaque_df, human_df)
+
+## Bind peaks
+peak_df <- all_df %>%
+  group_by(species, Network) %>%
+  filter(PRED.mean.pop.prop == max(PRED.mean.pop.prop, na.rm = TRUE))
+  
+p_list <- list()
+network_list <- c("Visual", "Somatomotor", "Dorsal Attention", "Ventral Attention", "Limbic", "Frontoparietal", "Default")
+for (NUM in 1:length(network_list)) {
+  p_df <- all_df %>%
+    filter(Network == network_list[NUM])
+  peak_data <- peak_df %>%
+    filter(Network == network_list[NUM])
+  p <- ggplot(data=p_df, aes(x=log_prop_age, y=PRED.mean.pop.prop, color=species)) +
+    geom_line(size=1.5) +
+    geom_point(data=peak_data, aes(x=log_prop_age, y=PRED.mean.pop.prop, color=species), size=3, alpha=0.8) +
+    scale_color_npg() +
+    theme_classic() +
+    ggtitle(network_list[NUM]) +
+    ylab("Proportion of maximum volume") +
+    xlab("") +
+    geom_vline(xintercept = log(0+0.02), alpha=0.7, color="gray", linetype="dashed") +
+    geom_vline(xintercept = log(0.013+0.02), alpha=0.7, color="gray", linetype="dashed") +
+    geom_vline(xintercept = log(0.0382+0.02), alpha=0.7, color="gray", linetype="dashed") +
+    geom_vline(xintercept = log(0.077+0.02), alpha=0.7, color="gray", linetype="dashed") +
+    geom_vline(xintercept = log(0.135+0.02), alpha=0.7, color="gray", linetype="dashed") +
+    geom_vline(xintercept = log(0.23+0.02), alpha=0.7, color="gray", linetype="dashed") +
+    geom_vline(xintercept = log(0.55+0.02), alpha=0.7, color="gray", linetype="dashed") +
+    #geom_hline(yintercept = 0) +
+    ylim(0.2, 1) +
+    #ylim(-0.15, 0.15) +
+    theme(
+      axis.text.x = element_text(angle=45, hjust=1, size=14),
+      axis.text.y = element_text(size=14),
+      axis.title.y = element_text(size=16),
+      plot.title = element_text(size=16),
+      legend.position = "none"
+    )
+  
+  if (NUM == length(network_list)) {
+    p <- p + scale_x_continuous(
+      breaks=c(log(0+0.02), log(0.013+0.02), log(0.0382+0.02), log(0.077+0.02), log(0.135+0.02), log(0.23+0.02), log(0.55+0.02)),
+      labels=c("Birth", "Infancy", "Toddler", "Childhood", "Adolescene", "Mid-life", "Elder")
+    ) 
+  } else {
+    p <- p + theme(
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()
+      )
+  }
+  p_list[[NUM]] <- p
+}
+
+final_p <- wrap_plots(p_list, ncol=1) +
+  plot_layout(
+    axis_titles = "collect",
+    guides = "collect"
+  )
+
+ggsave(plot=final_p, file.path("Figure6Images/YeoNetworkHumanMacaqueSamePlot.png"), width=5, height=14, dpi=400)
+ggsave(plot=final_p, file.path("Figure6Images/YeoNetworkHumanMacaqueSamePlot.pdf"), width=5, height=14, dpi=400)
+final_p
+```
+```{r}
+## Calculate rate of change as a barplot
+## Group the rate of change by age ranges, then take the mean for that period
+all_df <- all_df %>%
+  mutate(Lifestage = case_when(
+    species == "Macaque" & Age > 0 & Age < 0.33 ~ "Infancy",
+    species == "Macaque" & Age > 0.33 & Age < 1 ~ "Toddler",
+    species == "Macaque" & Age > 1 & Age < 3 ~ "Childhood",
+    species == "Macaque" & Age > 3 & Age < 6 ~ "Adolescence",
+    species == "Macaque" & Age > 6 & Age < 15 ~ "Mid-life",
+    species == "Macaque" & Age > 15 & Age < 25 ~ "Elder",
+    species == "Human" & Age > 0 & Age < 1 ~ "Infancy",
+    species == "Human" & Age > 1 & Age < 3 ~ "Toddler",
+    species == "Human" & Age > 3 & Age < 12 ~ "Childhood",
+    species == "Human" & Age > 12 & Age < 18 ~ "Adolescence",
+    species == "Human" & Age > 18 & Age < 40 ~ "Mid-life",
+    species == "Human" & Age > 40 & Age < 60 ~ "Elder"
+  )) %>%
+  group_by(species, Network) %>%
+  mutate(rate_of_change = c(0, diff(PRED.mean.pop.prop)))
+
+all_df_mean_summary <- all_df %>%
+  filter(!is.na(Lifestage)) %>%
+  group_by(species, Network, Lifestage) %>%
+  summarize(mean_rate_of_change = mean(rate_of_change))
+
+all_df_absolute_summary <- all_df %>%
+  filter(!is.na(Lifestage)) %>%
+  group_by(species, Network, Lifestage) %>%
+  summarize(absolute_change = last(PRED.mean.pop.prop) - first(PRED.mean.pop.prop))
+
+all_df_absolute_change_summary <- all_df %>%
+  filter(!is.na(Lifestage)) %>%
+  group_by(species, Network, Lifestage) %>%
+  summarize(absolute_rate_of_change = last(rate_of_change) - first(rate_of_change))
+```
+
+```{r}
+p_list <- list()
+network_list <- c("Visual", "Somatomotor", "Dorsal Attention", "Ventral Attention", "Limbic", "Frontoparietal", "Default")
+for (NUM in 1:length(network_list)) {
+  p_df <- all_df_mean_summary %>%
+    filter(Network == network_list[NUM])
+  lifestage_order <- c("Infancy", "Toddler", "Childhood", "Adolescence", "Mid-life", "Elder")
+  p_df$Lifestage <- factor(p_df$Lifestage, levels = lifestage_order)
+  p <- ggplot(data=p_df, aes(x=Lifestage, y=mean_rate_of_change, fill=species)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_npg() +
+    theme_bw() +
+    ggtitle(network_list[NUM]) +
+    ylab("Average rate of change") +
+    xlab("") +
+    theme(
+      axis.text.x = element_text(angle=45, hjust=1, size=14),
+      axis.text.y = element_text(size=14),
+      axis.title.y = element_text(size=16),
+      plot.title = element_text(size=16),
+      legend.position = "none"
+    )
+  if (NUM != length(network_list)) {
+    p <- p + theme(
+      axis.text.x = element_blank()
+    )
+  }
+  p_list[[NUM]] <- p
+}
+
+final_p <- wrap_plots(p_list, ncol=1) +
+  plot_layout(
+    axis_titles = "collect",
+    guides = "collect"
+  )
+
+final_p
+ggsave(plot=final_p, file.path("Figure6Images/YeoNetworkHumanMacaqueSamePlotMeanRateOfChange.png"), width=6, height=18, dpi=400)
+ggsave(plot=final_p, file.path("Figure6Images/YeoNetworkHumanMacaqueSamePlotMeanRateOfChange.pdf"), width=6, height=18, dpi=400)
+```
+
+```{r}
+p_list <- list()
+network_list <- c("Visual", "Somatomotor", "Dorsal Attention", "Ventral Attention", "Limbic", "Frontoparietal", "Default")
+for (NUM in 1:length(network_list)) {
+  p_df <- all_df_absolute_summary %>%
+    filter(Network == network_list[NUM])
+  lifestage_order <- c("Infancy", "Toddler", "Childhood", "Adolescence", "Mid-life", "Elder")
+  p_df$Lifestage <- factor(p_df$Lifestage, levels = lifestage_order)
+  p <- ggplot(data=p_df, aes(x=Lifestage, y=absolute_change, fill=species)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_npg() +
+    theme_bw() +
+    ggtitle(network_list[NUM]) +
+    ylab("Proportional change") +
+    xlab("") +
+    theme(
+      axis.text.x = element_text(angle=45, hjust=1, size=14),
+      axis.text.y = element_text(size=14),
+      axis.title.y = element_text(size=16),
+      plot.title = element_text(size=16),
+      legend.position = "none"
+    )
+  if (NUM != length(network_list)) {
+    p <- p + theme(
+      axis.text.x = element_blank()
+    )
+  }  
+  p_list[[NUM]] <- p
+}
+
+final_p <- wrap_plots(p_list, ncol=1) +
+  plot_layout(
+    axis_titles = "collect",
+    guides = "collect"
+  )
+
+final_p
+ggsave(plot=final_p, file.path("Figure6Images/YeoNetworkHumanMacaqueSamePlotAbsoluteChange.png"), width=5, height=18, dpi=400)
+ggsave(plot=final_p, file.path("Figure6Images/YeoNetworkHumanMacaqueSamePlotAbsoluteChange.pdf"), width=5, height=18, dpi=400)
+```
+
+```{r}
+p_list <- list()
+network_list <- c("Visual", "Somatomotor", "Dorsal Attention", "Ventral Attention", "Limbic", "Frontoparietal", "Default")
+for (NUM in 1:length(network_list)) {
+  p_df <- all_df_absolute_change_summary %>%
+    filter(Network == network_list[NUM])
+  lifestage_order <- c("Infancy", "Toddler", "Childhood", "Adolescence", "Mid-life", "Elder")
+  p_df$Lifestage <- factor(p_df$Lifestage, levels = lifestage_order)
+  p <- ggplot(data=p_df, aes(x=Lifestage, y=absolute_rate_of_change, fill=species)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_npg() +
+    theme_bw() +
+    ggtitle(network_list[NUM]) +
+    ylab("Rate of change at end of lifestage") +
+    xlab("") +
+    theme(
+      axis.text.x = element_text(angle=45, hjust=1, size=14),
+      axis.text.y = element_text(size=14),
+      axis.title.y = element_text(size=16),
+      plot.title = element_text(size=16),
+      legend.position = "none"
+    )
+  if (NUM != length(network_list)) {
+    p <- p + theme(
+      axis.text.x = element_blank()
+    )
+  }
+  p_list[[NUM]] <- p
+}
+
+final_p <- wrap_plots(p_list, ncol=1) +
+  plot_layout(
+    axis_titles = "collect",
+    guides = "collect"
+  )
+
+final_p
+ggsave(plot=final_p, file.path("Figure6Images/YeoNetworkHumanMacaqueSamePlotAbsoluteRateOfChange.png"), width=5, height=18, dpi=400)
+ggsave(plot=final_p, file.path("Figure6Images/YeoNetworkHumanMacaqueSamePlotAbsoluteRateOfChange.pdf"), width=5, height=18, dpi=400)
+```
+
+```{r}
+## Change the format of the data to get error bars with the bar plots
+macaque_mapping <- as.vector(read.csv("Figure6Data/MacaqueTimePoints/0/7Network-mapping.mapping.L.csv", header=TRUE)[, 1])
+human_mapping <- as.vector(read.csv("Figure6Data/HumanTimePoints/0/7Network-mapping.mapping.L.csv", header=TRUE)[, 1])
+network_names <- c("Visual", "Somatomotor", "Dorsal Attention", "Ventral Attention", "Limbic", "Frontoparietal", "Default")
+human_mapping <- human_mapping[-4]
+
+## Get a list of macaque and human with each element being PRED.mean.pop
+macaque_list <- lapply(macaqueCurves, function(X) {
+  dataframe <- data.frame(
+    Age = X$Age,
+    AgeTransformed = X$AgeTransformed,
+    LogAge = log(X$AgeTransformed),
+    PRED.mean.pop.prop = X$PRED.mean.pop.prop,
+    PRED.mean.pop.prop.growth = c(0, diff(X$PRED.mean.pop.prop))
+  )
+  return(dataframe)
+})
+human_list <- lapply(humanCurves, function(X) {
+  dataframe <- data.frame(
+    Age = X$Age,
+    AgeTransformed = X$AgeTransformed,
+    LogAge = log(X$AgeTransformed),
+    PRED.mean.pop.prop = X$PRED.mean.pop.prop,
+    PRED.mean.pop.prop.growth = c(0, diff(X$PRED.mean.pop.prop))
+  )
+})
+
+macaque_regions <- names(macaque_list)
+human_regions <- names(human_list)
+
+macaque_list <- lapply(seq_along(macaque_list), function(i) {
+  df <- macaque_list[[i]]
+  idx <- macaque_mapping[i]
+  if (idx == 0) {
+    network_name <- NA
+  } else {
+    network_name <- network_names[idx]
+  }
+  df$Network <- network_name
+  df$Region <- macaque_regions[i]
+  df$Species <- "Macaque"
+  df <- df %>%
+    mutate(Lifestage = case_when(
+        Age >= 0 & Age < 0.33 ~ "Infancy",
+        Age >= 0.33 & Age < 1 ~ "Toddler",
+        Age >= 1 & Age < 3 ~ "Childhood",
+        Age >= 3 & Age < 6 ~ "Adolescence",
+        Age >= 6 & Age < 15 ~ "Mid-life",
+        Age >= 15 & Age < 25 ~ "Elder"
+      )
+    )
+  return(df)
+})
+human_list <- lapply(seq_along(human_list), function(i) {
+  df <- human_list[[i]]
+  idx <- human_mapping[i]
+  if (idx == 0) {
+    network_name <- NA
+  } else {
+    network_name <- network_names[idx]
+  }
+  df$Network <- network_name
+  df$Region <- human_regions[i]
+  df$Species <- "Human"
+  df <- df %>%
+    mutate(Lifestage = case_when(
+      Age >= 0 & Age < 1 ~ "Infancy",
+      Age >= 1 & Age < 3 ~ "Toddler",
+      Age >= 3 & Age < 12 ~ "Childhood",
+      Age >= 12 & Age < 18 ~ "Adolescence",
+      Age >= 18 & Age < 40 ~ "Mid-life",
+      Age >= 40 & Age < 60 ~ "Elder")
+    )
+  return(df)
+})
+
+names(macaque_list) <- macaque_regions
+names(human_list) <- human_regions
+
+macaque_dataframe <- do.call(rbind, macaque_list)
+human_dataframe <- do.call(rbind, human_list)
+
+all_data <- na.omit(rbind(macaque_dataframe, human_dataframe))
+```
+
+```{r}
+## Now get the summary statistics for this dataframe
+summary_data <- all_data %>%
+  group_by(Species, Network, Lifestage, Region) %>%
+  ## Average across lifestages into per region
+  summarize(
+    PRED.mean.pop.prop.ave = mean(PRED.mean.pop.prop),
+    PRED.mean.pop.prop.growth.ave = mean(PRED.mean.pop.prop.growth)
+  ) %>%
+  ungroup() %>%
+  group_by(Species, Network, Lifestage) %>%
+  summarize(
+    PRED.mean.pop.prop.average = mean(PRED.mean.pop.prop.ave),
+    PRED.mean.pop.prop.sem = ifelse(n() > 1, sd(PRED.mean.pop.prop.ave) / sqrt(n()), 0),
+    PRED.mean.pop.growth.average = mean(PRED.mean.pop.prop.growth.ave),
+    PRED.mean.pop.prop.growth.sem = ifelse(n() > 1, sd(PRED.mean.pop.prop.growth.ave) / sqrt(n()), 0)
+  )
+```
+```{r}
+p_list <- list()
+network_list <- c("Visual", "Somatomotor", "Dorsal Attention", "Ventral Attention", "Limbic", "Frontoparietal", "Default")
+for (NUM in 1:length(network_list)) {
+  p_df <- summary_data %>%
+    filter(Network == network_list[NUM])
+  lifestage_order <- c("Infancy", "Toddler", "Childhood", "Adolescence", "Mid-life", "Elder")
+  p_df$Lifestage <- factor(p_df$Lifestage, levels = lifestage_order)
+  p <- ggplot(data=p_df, aes(x=Lifestage, y=PRED.mean.pop.growth.average, fill=Species)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    geom_errorbar(aes(ymin = PRED.mean.pop.growth.average - PRED.mean.pop.prop.growth.sem,
+                      ymax = PRED.mean.pop.growth.average + PRED.mean.pop.prop.growth.sem),
+                  position = position_dodge(0.9), width = 0.25) +
+    scale_fill_npg() +
+    theme_bw() +
+    ggtitle(network_list[NUM]) +
+    ylab("Average rate of change") +
+    xlab("") +
+    theme(
+      axis.text.x = element_text(angle=45, hjust=1, size=14),
+      axis.text.y = element_text(size=14),
+      axis.title.y = element_text(size=16),
+      plot.title = element_text(size=16),
+      legend.position = "none"
+    )
+  if (NUM != length(network_list)) {
+    p <- p + theme(
+      axis.text.x = element_blank()
+    )
+  }
+  p_list[[NUM]] <- p
+}
+
+final_p <- wrap_plots(p_list, ncol=1) +
+  plot_layout(
+    axis_titles = "collect",
+    guides = "collect"
+  )
+
+final_p
+ggsave(plot=final_p, file.path("Figure6Images/YeoNetworkHumanMacaqueSamePlotMeanRateOfChange.png"), width=6, height=18, dpi=400)
+ggsave(plot=final_p, file.path("Figure6Images/YeoNetworkHumanMacaqueSamePlotMeanRateOfChange.pdf"), width=6, height=18, dpi=400)
+```
+
+
+Calculating the mapping for the mesulam cyto-architecture
+
+```{r}
+macaque_mapping <- as.vector(read.csv("Figure6Data/MacaqueTimePoints/0/mesulam-mapping.mapping.L.csv", header=TRUE)[, 1])
+human_mapping <- as.vector(read.csv("Figure6Data/HumanTimePoints/0/mesulam-mapping.mapping.L.csv", header=TRUE)[, 1])
+human_mapping <- human_mapping[-4]
+macaque_list <- lapply(macaqueCurves, function(X) X$PRED.mean.pop)
+human_list <- lapply(humanCurves, function(X) X$PRED.mean.pop)
+macaque_sums <- tapply(seq_along(macaque_list), macaque_mapping, function(indices) {
+  Reduce(`+`, macaque_list[indices])
+})
+human_sums <- tapply(seq_along(human_list), human_mapping, function(indices) {
+  Reduce(`+`, human_list[indices])
+})
+names(macaque_sums) <- c("Paralimbic", "High-order Association", "Modality-specific Association", "Idiotypic (primary)")
+names(human_sums) <- c("Paralimbic", "High-order Association", "Modality-specific Association", "Idiotypic (primary)")
+macaque_sums <- lapply(macaque_sums, function(X) {
+  X <- as.data.frame(X)
+  X$Age <- macaqueCurves$somatosensory.area.1$Age
+  X$AgeTransformed <- macaqueCurves$somatosensory.area.1$AgeTransformed
+  X$LogAge <- log(X$AgeTransformed)
+  X <- X %>%
+    mutate(PRED.mean.pop.prop = X / max(X)) 
+  return(X)
+  })
+
+human_sums <- lapply(human_sums, function(X) {
+  X <- as.data.frame(X)
+  X <- X %>%
+    mutate(PRED.mean.pop.prop = X / max(X))
+  X$Age <- humanCurves$bankssts$Age
+  X$LogAge <- humanCurves$bankssts$AgeTransformed
+  return(X)
+  })
+for (i in seq_along(macaque_sums)) {
+  macaque_sums[[i]]$Network <- names(macaque_sums)[i]
+  human_sums[[i]]$Network <- names(human_sums)[i]
+}
+macaque_df <- do.call(rbind, macaque_sums)
+human_df <- do.call(rbind, human_sums)
+
+macaque_peak_df <- macaque_df %>%
+  group_by(Network) %>%
+  filter(PRED.mean.pop.prop == max(PRED.mean.pop.prop, na.rm = TRUE))
+human_peak_df <- human_df %>%
+  group_by(Network) %>%
+  filter(PRED.mean.pop.prop == max(PRED.mean.pop.prop, na.rm = TRUE))
+```
+
+```{r}
+## Make a proportional peak barplot
+macaque_peak_df$prop_age <- macaque_peak_df$Age / 25
+macaque_peak_df$Species <- "Macaque"
+human_peak_df$prop_age <- human_peak_df$Age / 80
+human_peak_df$Species <- "Human"
+all_peak_df <- rbind(macaque_peak_df, human_peak_df)
+
+p <- ggplot(data=all_peak_df, aes(x=Network, y=prop_age, fill=Species)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_npg() +
+  xlab("") +
+  ylab("") +
+  theme_classic() +
+  scale_y_continuous(
+    breaks=c(0, 0.013, 0.038, 0.077),
+    labels=c("Birth", "Infancy", "Toddler", "Childhood")
+  ) +
+  geom_hline(yintercept=0, linetype="dashed", color="gray") +
+  geom_hline(yintercept=0.013, linetype="dashed", color="gray") +
+  geom_hline(yintercept=0.038, linetype="dashed", color="gray") +
+  geom_hline(yintercept=0.077, linetype="dashed", color="gray") +
+  theme(
+    axis.text.x = element_text(angle=45, hjust=1)
+  )
+
+p
+ggsave(plot=p, file.path("Figure6Images/MesulamBarPlot.png"), width=5, height=5)
+```
+
+```{r}
+library(tidyverse)
+## Scatterplot of network development for Yeo network
+## Have to fix the proportional estimation
+getPeaks <- function(boundData, prop) {
+  peak_df <- boundData %>%
+    group_by(species, Network) %>%
+    filter(PRED.mean.pop.prop > prop) %>%
+    slice(which.min(Age))
+  return(peak_df)
+}
+
+unmeltDf <- function(peak_data) {
+  unmelted_df <- peak_data %>%
+    select(species, Network, Age) %>%
+    pivot_wider(names_from = species, values_from = Age)
+  return(unmelted_df)
+}
+
+macaque_df$species <- "Macaque"
+macaque_df$prop_age <- macaque_df$Age / 25
+macaque_df$log_prop_age <- log(macaque_df$prop_age+0.02)
+human_df$species <- "Human"
+human_df$prop_age <- human_df$Age / 80
+human_df$log_prop_age <- log(human_df$prop_age+0.02)
+all_df <- rbind(macaque_df, human_df)
+
+peak_df <- getPeaks(all_df, 0.99999)
+unmelted_df <- unmeltDf(peak_df)
+
+ggplot(data=unmelted_df, aes(x=Human, y=Macaque, color=Network)) +
+  geom_point(size=3) +
+  scale_color_npg() +
+  theme_bw()
+```
+
+```{r}
+## Function for binding mapping to macaque or human curves
+bindNetwork <- function(curves, mapping, networkType) {
+  storedNames <- names(curves)
+  if (networkType == "Yeo") {
+    network_names <- c("Visual", "Somatomotor", "Dorsal Attention", "Ventral Attention", "Limbic", "Frontoparietal", "Default")
+  } else if (networkType == "Mesulam") {
+    network_names <- c("Paralimbic", "High-order Association", "Modality-specific Association", "Idiotypic (primary)")
+  }
+  curves <- lapply(seq_along(curves), function(i) {
+    X <- curves[[i]]
+    X$Network <- mapping[i]
+    X$metric <- storedNames[i]
+    return(X)
+  })
+  curves <- lapply(curves, function(X) {
+    X$Network <- network_names[X$Network]
+    return(X)
+  })
+  names(curves) <- storedNames
+  return(curves)
+}
+
+## Function to summarize all the networks by summing
+sumNetworkTrajectories <- function(curves) {
+  library(dplyr)
+  networkCurves <- do.call(rbind, curves)
+  networkCurves <- networkCurves %>%
+    group_by(Network, Age) %>%
+    mutate(PRED.mean.pop.network = sum(PRED.mean.pop)) %>%
+    ungroup() %>%
+    group_by(Network) %>%
+    mutate(PRED.mean.pop.prop.network = PRED.mean.pop.network / max(PRED.mean.pop.network))
+  return(networkCurves)
+}
+
+bindCrossSpecies <- function(macaqueNetwork, humanNetwork) {
+  macaqueNetwork$Species <- "Macaque"
+  macaqueNetwork$propAge <- macaqueNetwork$Age / 25
+  macaqueNetwork$logPropAge <- log(macaqueNetwork$propAge+0.02)
+  humanNetwork$Species <- "Human"
+  humanNetwork$propAge <- humanNetwork$Age / 80
+  humanNetwork$logPropAge <- log(humanNetwork$propAge+0.02)
+  networkData <- rbind(macaqueNetwork, humanNetwork)
+  return(networkData)
+}
+
+macaque_mapping <- as.vector(read.csv("Figure6Data/MacaqueTimePoints/0/7Network-mapping.mapping.L.csv", header=TRUE)[, 1])
+macaque_mapping[macaque_mapping == 0] <- NA
+human_mapping <- as.vector(read.csv("Figure6Data/HumanTimePoints/0/7Network-mapping.mapping.L.csv", header=TRUE)[, 1])[-4]
+macaqueYeo <- bindNetwork(macaqueCurves, macaque_mapping, "Yeo")
+humanYeo <- bindNetwork(humanCurves, human_mapping, "Yeo")
+macaqueYeo <- sumNetworkTrajectories(macaqueYeo)
+humanYeo <- sumNetworkTrajectories(humanYeo)
+networkData <- bindCrossSpecies(macaqueYeo, humanYeo)
+```
+
+```{r}
+## Plotting
+library(tidyverse)
+## Scatterplot of network development for Yeo network
+## Have to fix the proportional estimation
+getPeaks <- function(boundData, prop) {
+  peak_df <- boundData %>%
+    group_by(Species, metric) %>%
+    filter(PRED.mean.pop.prop >= prop) %>%
+    slice(which.min(Age))
+  return(peak_df)
+}
+
+unmeltDf <- function(peak_data) {
+  unmelted_df <- peak_data %>%
+    select(Species, metric, Age) %>%
+    pivot_wider(names_from = Species, values_from = Age)
+  return(unmelted_df)
+}
+
+createMacaquePeakGifti <- function(MVal, prefix) {
+  write.table(MVal, "Figure3Scripts/temp_MVal.csv", col.names=FALSE, row.names=FALSE)
+  system(paste("python3", "Figure3Scripts/mapToSurface.py", "--lh-csv", "Figure3Scripts/temp_MVal.csv", "--rh-csv", "Figure3Scripts/temp_MVal.csv", "--parcellation", "markov", "--save-prefix", paste0("Figure6Data/macaque2human/func.gifti.markov/", "M.", prefix)))
+}
+
+metricResample <- function(prefix) {
+  wb_command_dir="/Applications/workbench/bin_macosx64"
+  func_gii_files="/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Plotting/Final/Figure6Data/macaque2human/func.gifti.markov"
+  output="/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Plotting/Final/Figure6Data/macaque2human/markov.human.space"
+  deformation_spheres="/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Atlas/alignment_macaque-human/deformation_macaque-human"
+  human_spheres="/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Atlas/alignment_macaque-human/surfaces/Human/32k_fs_LR"
+  
+  lh.cmd <- paste(file.path(wb_command_dir, "wb_command"),
+               "-metric-resample",
+               file.path(func_gii_files, paste0("M.", prefix, ".lh.func.gii")),
+               file.path(deformation_spheres, "L.macaque-to-human.sphere.reg.32k_fs_LR.surf.gii"),
+               file.path(human_spheres, "S1200.L.sphere.32k_fs_LR.surf.gii"),
+               "BARYCENTRIC",
+               file.path(output, paste0("M.", prefix, ".lh.func.gii")),
+               "-largest")
+  rh.cmd <- paste(file.path(wb_command_dir, "wb_command"),
+               "-metric-resample",
+               file.path(func_gii_files, paste0("M.", prefix, ".rh.func.gii")),
+               file.path(deformation_spheres, "R.macaque-to-human.sphere.reg.32k_fs_LR.surf.gii"),
+               file.path(human_spheres, "S1200.R.sphere.32k_fs_LR.surf.gii"),
+               "BARYCENTRIC",
+               file.path(output, paste0("M.", prefix, ".rh.func.gii")),
+               "-largest")
+  system(lh.cmd, wait=TRUE)
+  system(rh.cmd, wait=TRUE)
+}
+
+reparcellate <- function(prefix) {
+  aparc="/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Atlas/aparc"
+  metrics="/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Plotting/Final/Figure6Data/macaque2human/markov.human.space"
+  output="/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Plotting/Final/Figure6Data/macaque2human/aparc"
+  outputGIFTI="/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/BrainChartsCode/PRIME-DE-Lifespan/Plotting/Final/Figure6Data/macaque2human/aparc"
+  
+  cmd <- paste(
+    "python3 Figure3Scripts/remapMarkov2Aparc.py",
+    "--lh-label-file", file.path(aparc, "fs_LR.aparc.L.32k.func.gii"),
+    "--rh-label-file", file.path(aparc, "fs_LR.aparc.R.32k.func.gii"),
+    "--lh-metric-file", file.path(metrics, paste0("M.", prefix, ".lh.func.gii")),
+    "--rh-metric-file", file.path(metrics, paste0("M.", prefix, ".rh.func.gii")),
+    "--lh-output", file.path(output, paste0("M.", prefix, ".lh.csv")),
+    "--rh-output", file.path(output, paste0("M.", prefix, ".rh.csv")),
+    "--parcellation", "aparc"
+  )
+  
+  system(cmd, wait=TRUE)
+}
+
+map2human <- function(data, prefix) {
+  markov_order <- fromJSON("../../data_v2.0/demographics/markov_order.json")
+  aparc_order <- fromJSON("../../data_v2.0/demographics/aparc_order.json")
+  macaqueData <- data %>%
+    filter(Species == "Macaque")
+  surfaceData <- macaqueData[match(names(markov_order), macaqueData$metric), ]
+  surfaceDataAge <- c(0, surfaceData$Age)
+  ## Map to surface first
+  createMacaquePeakGifti(surfaceDataAge, prefix)
+  ## Map 2 human space
+  metricResample(prefix)
+  ## Re-parcellate from markov to aparc
+  reparcellate(prefix)
+  ## Load the data back in (just the left) and return
+  data <- as.data.frame(read.csv(file.path("Figure6Data/macaque2human/aparc", paste0("M.", prefix, ".lh.csv")), header=FALSE)[-1, ])
+  colnames(data) <- c("MacaquePeak")
+  data$metric <- names(aparc_order)
+  return(data)
+}
+
+mergeMacaqueHumanPeaks <- function(macaque2human, peak_df) {
+  peakData <- peak_df %>%
+    filter(Species == "Human")
+  merged <- merge(peakData[, c("Age", "Network", "metric")], macaque2human, by="metric")
+  return(merged)
+}
+
+peak_df <- getPeaks(networkData, 0.75)
+macaque2humanData <- map2human(peak_df, "Proportion.0.75")
+peakData <- mergeMacaqueHumanPeaks(macaque2humanData, peak_df)
+```
+
+```{r}
+loopNetworkPlotting <- function(propList) {
+  p_list <- list()
+  for (NUM in 1:length(propList)) {
+    prop <- propList[NUM]
+    prefixName <- paste0("Proportion.", prop)
+    peak_df <- getPeaks(networkData, prop)
+    macaque2humanData <- map2human(peak_df, prefixName)
+    peakData <- mergeMacaqueHumanPeaks(macaque2humanData, peak_df)
+    p <- ggplot(data=peakData, aes(Age, y=MacaquePeak, color=Network)) +
+      geom_point(size=3) +
+      scale_color_npg() +
+      theme_bw() +
+      ylim(0, 30) +
+      xlim(0, 30) +
+      ggtitle(prop) +
+      ggeasy::easy_center_title()
+    ggsave(file.path("Figure6Images/ProportionalPeaks", paste0(prefixName, ".png")), plot=p, width=6, height=4)
+    p_list[[NUM]] <- p
+  }
+  return(p_list)
+}
+
+createGIF <- function(propList) {
+  library(magick)
+  pngPath <- file.path("Figure6Images/ProportionalPeaks")
+  paths <- sapply(propList, function(X) file.path(pngPath, paste0("Proportion.", X, ".png")))
+  paths <- Filter(file.exists, paths)
+  images <- image_join(lapply(paths, image_read))
+  gif <- image_animate(images, fps = 2)
+  image_write(gif, path = file.path(pngPath, "growth.gif"))
+}
+
+propList <- seq(0.5, 0.8, by=0.05)
+propList <- c(propList, seq(0.82, 0.95, by=0.02))
+propList <- c(propList, seq(0.951, 1, by=0.001))
+p_list <- loopNetworkPlotting(propList)
+createGIF(propList)
+```
+
+```{r}
+
+```
+

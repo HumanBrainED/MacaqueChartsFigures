@@ -1,0 +1,182 @@
+Plot the proportional volume, cortical area, cortical thickness at specific milestones
+Plot the growth rate of volume, cortical area, and cortical thickness at same specific milestones
+Get the RAW group averages of these as well
+
+```{r}
+source("../../102.gamlss-recode.r")
+getPropMaxValue <- function(source, ages, species) {
+  source("../../301.functions.r")
+  if (species == "monkey") {
+    markovOrder <- fromJSON("../../Data/ParcellationMappings/markov_order.json")
+    SUBSET.LIST <- list()
+    for (NUM in 1:length(markovOrder)) {
+      FIT.EXTRACT <- readRDS(file.path("../../RDS", source, names(markovOrder[NUM]), "FIT.EXTRACT.rds"))
+      CURVE <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(0.452, 35, by = 1/365), Sex = "F")),
+        expand.grid(list(AgeTransformed = seq(0.452, 35, by = 1/365), Sex = "M"))
+        ), 
+        FITParam = FIT.EXTRACT$param
+      )
+      CURVE$Age <- CURVE$AgeTransformed - 0.452
+      SUBSET.LIST[[names(markovOrder)[NUM]]] <- CURVE %>%
+        group_by(Sex) %>%
+        mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop)) %>%
+        mutate(PRED.m500.pop.slope = c(diff(PRED.m500.pop), NA))
+    }
+    maxProp <- lapply(SUBSET.LIST, function(X) {
+      values <- do.call(rbind, lapply(ages, function(a) {
+        X %>% 
+          slice(which.min(abs(Age - a)))
+      }))
+      return(values)
+    })
+    return(maxProp) 
+  } else if (species == "human") {
+    aparcOrder <- fromJSON("../../data_v2.0/demographics/aparc_order.json")
+    SUBSET.LIST <- list()
+    for (NUM in 1:length(aparcOrder)) {
+      if (!file.exists(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))) {
+        SUBSET.LIST[[names(aparcOrder)[NUM]]] <- NULL
+        next
+      }
+      FIT.EXTRACT <- readRDS(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))
+      CURVE <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(log(365),log(365*95),by=0.01), sex = "Female")),
+        expand.grid(list(AgeTransformed = seq(log(365),log(365*95),by=0.01), sex = "Male"))
+        ), 
+        FITParam = FIT.EXTRACT$param
+      )
+      CURVE$FakeAge <- exp(CURVE$AgeTransformed)
+      CURVE$Age <- (CURVE$FakeAge - 365) / 365
+      SUBSET.LIST[[names(aparcOrder)[NUM]]] <- CURVE %>%
+        filter(sex == "Male") %>%
+        mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop))
+    }
+    maxProp <- lapply(SUBSET.LIST, function(X) {
+      values <- X %>%
+        mutate(closest_age = sapply(Age, function(a) ages[which.min(abs(a - ages))])) %>%
+        mutate(closest_age_diff = abs(Age - closest_age)) %>%
+        group_by(closest_age) %>%
+        slice_min(closest_age_diff) %>%
+        ungroup() %>%
+        mutate(PRED.mean.pop.prop.diff = c(NA, diff(PRED.mean.pop.prop)))
+      return(values)
+    })
+    return(maxProp)
+  }
+}
+
+ages <- c(0, 0.33, 1, 2, 3, 6, 15, 25)
+ages_human <- c(0, 1, 3, 6, 12, 18, 40, 60)
+maxPropVolume <- getPropMaxValue("MARKOV.VOLUME.COMBAT", 
+                                 ages,
+                                 "monkey")
+#maxPropVolumeHuman <- getPropMaxValue("Human",
+#                                      ages_human,
+#                                      "human")
+maxPropArea <- getPropMaxValue("MARKOV.AREA.COMBAT",
+                               ages,
+                               "monkey")
+maxPropThickness <- getPropMaxValue("MARKOV.THICKNESS.COMBAT",
+                                    ages,
+                                    "monkey")
+LARGE <- list()
+LARGE[["Volume"]] <- maxPropVolume
+LARGE[["Area"]] <- maxPropArea
+LARGE[["Thickness"]] <- maxPropThickness
+```
+
+```{r}
+curveDataGrowth <- function(data, ages, sex) {
+  averages <- list()
+  phenotypes <- c("Volume", "Area", "Thickness")
+  markovOrder <- fromJSON("../../Data/ParcellationMappings/markov_order.json")
+  for (IDX in 1:length(phenotypes)) {
+    averages[[phenotypes[IDX]]] <- list()
+    for (NUM in 1:length(ages)) {
+      averages[[phenotypes[IDX]]][[NUM]] <- list()
+      for (ROI in 1:length(markovOrder)) {
+        df <- data[[phenotypes[IDX]]][[names(markovOrder)[ROI]]] %>%
+          filter(Sex == sex) %>%
+          slice(which.min(abs(Age - ages[NUM])))
+        
+        averages[[phenotypes[IDX]]][[NUM]][[names(markovOrder)[ROI]]] <- df[, "PRED.m500.pop.slope"]
+      }
+    }
+    names(averages[[phenotypes[IDX]]]) <- ages
+  }
+  return(averages)
+}
+
+ages <- c(0, 0.33, 1, 2, 3, 6, 15, 25)
+growthRatesMale <- curveDataGrowth(LARGE, ages, "M")
+growthRatesFemale <- curveDataGrowth(LARGE, ages, "F")
+```
+
+```{r}
+propMaxValue <- function(data, ages, sex) {
+  averages <- list()
+  phenotypes <- c("Volume", "Area", "Thickness")
+  markovOrder <- fromJSON("../../Data/ParcellationMappings/markov_order.json")
+  for (IDX in 1:length(phenotypes)) {
+     averages[[phenotypes[IDX]]] <- list()
+     for (NUM in 1:length(ages)) {
+       averages[[phenotypes[IDX]]][[NUM]] <- list()
+       for (ROI in 1:length(markovOrder)) {
+         df <- data[[phenotypes[IDX]]][[names(markovOrder)[ROI]]] %>%
+          filter(Sex == sex) %>%
+          filter(AgeTransformed == (ages[NUM]+0.452))
+         
+         if (phenotypes[IDX] == "Thickness") {
+           averages[[phenotypes[IDX]]][[NUM]][[names(markovOrder)[ROI]]] <- df[, "PRED.mean.pop"]
+         } else {
+           averages[[phenotypes[IDX]]][[NUM]][[names(markovOrder)[ROI]]] <- df[, "PRED.mean.pop.prop"]
+         }
+       }
+     }
+     names(averages[[phenotypes[IDX]]]) <- ages
+  }
+  return(averages)
+}
+
+ages <- c(0, 0.33, 1, 2, 3, 6, 15, 25)
+proportionalValuesMale <- propMaxValue(LARGE, ages, "M")
+proportionalValuesFemale <- propMaxValue(LARGE, ages, "F")
+```
+
+```{r}
+## Visualize
+Visualize.Surface <- function(lh_data, rh_data, species, parcellation, save_location, color_map, color_range_min, color_range_max) {
+  setwd("/Users/Sam.Alldritt/Documents/CMI/PRIME-DE/MacaqueCharts-Code-Release")
+  write.table(lh_data, "Plotting/temp_lh_data.csv", col.names = FALSE, row.names = FALSE)
+  write.table(rh_data, "Plotting/temp_rh_data.csv", col.names = FALSE, row.names = FALSE)
+  system(paste("python3", "Plotting/Surface.Plotting.py", parcellation, species, save_location, color_map, color_range_min, color_range_max, "Plotting/temp_lh_data.csv", "Plotting/temp_rh_data.csv", sep = " "))
+}
+
+loopVisualizeSurface <- function(data, ages, type, measure, color_map, min, max, sex) {
+  phenotypes <- c("Volume", "Area", "Thickness")
+  for (NUM in 1:length(ages)) {
+    vals <- c(0, sapply(data[[type]][[NUM]], function(X) X))
+    print(vals)
+    savePrefix <- file.path("Plotting/Final/MilestoneGrowth", measure, paste0(sex, "_", type, "_", ages[NUM], ".png"))
+    Visualize.Surface(vals, vals, "monkey", "markov", savePrefix, color_map, min, max)
+  }
+}
+
+#loopVisualizeSurface(growthRatesMale, ages, "Volume", "Growth", "coolwarm", -1, 1, "M")
+#loopVisualizeSurface(growthRatesMale, ages, "Area", "Growth", "coolwarm", -0.1, 0.1, "M")
+loopVisualizeSurface(growthRatesMale, ages, "Thickness", "Growth", "coolwarm", -0.0025, 0.0025, "M")
+#loopVisualizeSurface(growthRatesFemale, ages, "Volume", "Growth", "coolwarm", -1, 1, "F")
+#loopVisualizeSurface(growthRatesFemale, ages, "Area", "Growth", "coolwarm", -0.1, 0.1, "F")
+loopVisualizeSurface(growthRatesFemale, ages, "Thickness", "Growth", "coolwarm", -0.0025, 0.0025, "F")
+#loopVisualizeSurface(proportionalValuesMale, ages, "Volume", "Prop", "Reds", 0.7, 1, "M")
+#loopVisualizeSurface(proportionalValuesMale, ages, "Area", "Prop", "Reds", 0.7, 1, "M")
+#loopVisualizeSurface(proportionalValuesMale, ages, "Thickness", "Prop", "Reds", 1, 3, "M")
+#loopVisualizeSurface(proportionalValuesFemale, ages, "Volume", "Prop", "Reds", 0.7, 1, "F")
+#loopVisualizeSurface(proportionalValuesFemale, ages, "Area", "Prop", "Reds", 0.7, 1, "F")
+#loopVisualizeSurface(proportionalValuesFemale, ages, "Thickness", "Prop", "Reds", 1, 3, "F")
+```
+
+

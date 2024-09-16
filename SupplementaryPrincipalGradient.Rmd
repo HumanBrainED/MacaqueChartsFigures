@@ -1,0 +1,139 @@
+## Warp principal gradient to macaque space
+## Average principal gradient values by parcel for both species
+## Bin the parcels into percentiles
+## Show extended development for humans in upper parts of bins
+
+```{r}
+## Load in growth trajectories
+getPropMaxValue <- function(source, ages, species) {
+  source("../../301.functions.r")
+  if (species == "monkey") {
+    markovOrder <- fromJSON("../../data_v2.0/demographics/markov_order.json")
+    SUBSET.LIST <- list()
+    for (NUM in 1:length(markovOrder)) {
+      FIT.EXTRACT <- readRDS(file.path("../../RDS", source, names(markovOrder[NUM]), "FIT.EXTRACT.rds"))
+      CURVE <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(FakeAge = seq(0.452, 35, by = 0.01), Sex = "F")),
+        expand.grid(list(FakeAge = seq(0.452, 35, by = 0.01), Sex = "M"))
+        ), 
+        FITParam = FIT.EXTRACT$param
+      )
+      CURVE$Age <- CURVE$FakeAge - 0.452
+      SUBSET.LIST[[names(markovOrder)[NUM]]] <- CURVE %>%
+        filter(Sex == "M") %>%
+        mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop)) %>%
+        mutate(metric = names(markovOrder)[NUM])
+    }
+    maxProp <- lapply(SUBSET.LIST, function(X) {
+      values <- X %>%
+      filter(Age %in% ages) %>%
+      mutate(PRED.mean.pop.prop.diff = c(NA, diff(PRED.mean.pop.prop)))
+    })
+    return(SUBSET.LIST) 
+  } else if (species == "human") {
+    aparcOrder <- fromJSON("../../data_v2.0/demographics/aparc_order.json")
+    SUBSET.LIST <- list()
+    for (NUM in 1:length(aparcOrder)) {
+      if (!file.exists(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))) {
+        SUBSET.LIST[[names(aparcOrder)[NUM]]] <- NULL
+        next
+      }
+      FIT.EXTRACT <- readRDS(file.path("Figure4Data", paste0("FIT_", names(aparcOrder)[NUM], ".rds")))
+      CURVE <- Apply.Param(
+        NEWData = rbind(
+        expand.grid(list(AgeTransformed = seq(log(365),log(365*95),by=0.01), sex = "Female")),
+        expand.grid(list(AgeTransformed = seq(log(365),log(365*95),by=0.01), sex = "Male"))
+        ), 
+        FITParam = FIT.EXTRACT$param
+      )
+      CURVE$FakeAge <- exp(CURVE$AgeTransformed)
+      CURVE$Age <- (CURVE$FakeAge - 365) / 365
+      SUBSET.LIST[[names(aparcOrder)[NUM]]] <- CURVE %>%
+        filter(sex == "Male") %>%
+        mutate(PRED.mean.pop.prop = PRED.mean.pop / max(PRED.mean.pop)) %>%
+        mutate(metric = names(aparcOrder)[NUM])
+    }
+    maxProp <- lapply(SUBSET.LIST, function(X) {
+      values <- X %>%
+        mutate(closest_age = sapply(Age, function(a) ages[which.min(abs(a - ages))])) %>%
+        mutate(closest_age_diff = abs(Age - closest_age)) %>%
+        group_by(closest_age) %>%
+        slice_min(closest_age_diff) %>%
+        ungroup() %>%
+        mutate(PRED.mean.pop.prop.diff = c(NA, diff(PRED.mean.pop.prop)))
+      return(values)
+    })
+    return(SUBSET.LIST)
+  }
+}
+
+macaqueCurves <- getPropMaxValue("MARKOV.VOLUME.COMBAT", c(0), "monkey")
+humanCurves <- getPropMaxValue("Human", c(0), "human")
+```
+
+```{r}
+bins <- c(0, 1, 2, 3, 4)
+getCurves <- function(curves, bin, species) {
+  mapping <- read.csv(file.path(
+    "SupplementaryPrincipalGradientData",
+    "principal_gradient",
+    species,
+    "binned",
+    paste0("bin_", bin, "_mapping.txt")))
+  ## Now return the curves at that index as a dataframe
+  mapping <- mapping[, 1]
+  logical_index <- mapping == 1
+  subset_list <- curves[logical_index]
+  bind_df <- do.call(rbind, subset_list)
+  return_df <- bind_df %>%
+    group_by(Age) %>%
+    summarise(
+      avg_PRED.mean.pop.prop = mean(PRED.mean.pop.prop, na.rm = TRUE),
+      FakeAge = first(FakeAge)
+    )
+  if (species == "macaque") {
+    return_df <- return_df %>%
+      mutate(prop_age = Age/25) %>%
+      mutate(log_prop_age = log(prop_age+0.02)) %>%
+      mutate(species = "macaque")
+  } else if (species == "human") {
+    return_df <- return_df %>%
+      mutate(prop_age = Age/80) %>%
+      mutate(log_prop_age = log(prop_age+0.02)) %>%
+      mutate(species = "human")
+  }
+  View(return_df)
+  return(return_df)
+}
+macaquetest <- getCurves(macaqueCurves, 4, "macaque")
+humantest <- getCurves(humanCurves, 4, "human")
+df <- rbind(macaquetest, humantest)
+```
+
+```{r}
+library(patchwork)
+loopLoad <- function() {
+  bin_count <- c(0, 1, 2, 3, 4)
+  plot_list <- list()
+  for (bin in bin_count) {
+    macaque <- getCurves(macaqueCurves, bin, "macaque")
+    human <- getCurves(humanCurves, bin, "human")
+    df <- rbind(macaque, human)
+    plot_list[[bin+1]] <- ggplot(data=df, aes(x=log_prop_age, y=avg_PRED.mean.pop.prop, color=species)) +
+      geom_line(size=1.5) +
+      theme_minimal() +
+      ggtitle(bin) +
+      ylim(0.5, 1)
+  }
+  return(plot_list)
+}
+plot_list <- loopLoad()
+p <- wrap_plots(plot_list, ncol=5) +
+  plot_layout(
+    axis_titles = "collect",
+    guides = "collect"
+  )
+ggsave(plot=p, file.path("SupplementaryPrincipalGradientImages/gradient_dist.png"), width=12, height=4)
+```
+
