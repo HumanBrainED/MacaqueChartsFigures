@@ -5,8 +5,8 @@ This repo contains code to replicate the figures in Brain Charts for the Rhesus 
 ![Figure 3](Figure3Images/Figure3.png)
 
 <div style="display: flex; justify-content: space-around;">
-  <img src="Figure3Images/LifespanSurfaceImages/volume_curve/growth.gif" alt="Macaque" width="400"/>
-  <img src="Figure3Images/LifespanSurfaceImages/volume_curve_human/growth.gif" alt="Human" width="400"/>
+  <img src="Figure3Images/LifespanSurfaceImages/volume_curve/growth.gif" alt="Macaque" width="410"/>
+  <img src="Figure3Images/LifespanSurfaceImages/volume_curve_human/growth.gif" alt="Human" width="410"/>
 </div>
 
 ### Figure 1: Global tissue type lifespan curves
