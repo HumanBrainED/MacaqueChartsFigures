@@ -1,3 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  .cover-photo {
+    position: relative;
+    text-align: center;
+    color: white;
+  }
+  .cover-photo img {
+    width: 100%;
+    height: auto;
+  }
+  .cover-photo .text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: white;
+    font-size: 24px;
+  }
+</style>
+</head>
+<body>
+
+<div class="cover-photo">
+  <img src="Figure3Images/Figure3.pdf" alt="Cover Photo">
+  <div class="text">Macaque Charts Figures</div>
+</div>
+
 # Macaque Charts Figures Code
 
 This repo contains code to replicate the figures in Brain Charts for the Rhesus Macaque Lifespan
