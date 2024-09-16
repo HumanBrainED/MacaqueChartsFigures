@@ -2,11 +2,9 @@
 
 This repo contains code to replicate the figures in Brain Charts for the Rhesus Macaque Lifespan
 
-### Two GIFs Side by Side
-
 <div style="display: flex; justify-content: space-around;">
-  <img src="Figure3Images/LifespanSurfaceImages/volume_curve/growth.gif" alt="First GIF" width="300"/>
-  <img src="Figure3Images/LifespanSurfaceImages/volume_curve_human.gif" alt="Second GIF" width="300"/>
+  <img src="Figure3Images/LifespanSurfaceImages/volume_curve/growth.gif" alt="Macaque" width="500"/>
+  <img src="Figure3Images/LifespanSurfaceImages/volume_curve_human/growth.gif" alt="Human" width="500"/>
 </div>
 
 ### Figure 1: Global tissue type lifespan curves
