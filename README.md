@@ -1,6 +1,6 @@
 # Macaque Charts Figures Code
 
-This repo contains code to replicate the figures in Brain Charts for the Rhesus Macaque Lifespan.
+This repo contains code to replicate the figures in [**Brain Charts for the Rhesus Macaque Lifespan**](https://www.biorxiv.org/content/10.1101/2024.08.28.610193v1).
 
 Lifespan models were fit using Generalized Additive Models for Location, Scale, and Shape (GAMLSS). A wrapper for the R implementation of GAMLSS was used specifically for modeling age-related brain changes over the lifespan, first built and used by Richard Bethlehem and Jakob Seidlitz for Brain Charts for the Human Lifespan (Bethlehem & Seidlitz, 2022). [See the base code here.](https://github.com/brainchart/Lifespan)
 ![Figure 3](Figure3Images/Figure3.png)
@@ -45,8 +45,7 @@ Lifespan models were fit using Generalized Additive Models for Location, Scale, 
 
 ### References
 
-- Bethlehem, R. A. I. et al. Brain charts for the human lifespan. Nature 604, 525–533 (2022).
-- Alldritt, S. et al. Brain Charts for the Rhesus Macaque Lifespan. Neuroscience (2024).
+- Alldritt, S. et al. Brain Charts for the Rhesus Macaque Lifespan. biorxiv (https://www.biorxiv.org/content/10.1101/2024.08.28.610193v1).
 
 
 
