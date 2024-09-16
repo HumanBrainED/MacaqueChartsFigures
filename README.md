@@ -45,8 +45,8 @@ Lifespan models were fit using Generalized Additive Models for Location, Scale, 
 
 ### References
 
-Bethlehem, R. A. I. et al. Brain charts for the human lifespan. Nature 604, 525–533 (2022).
-Alldritt, S. et al. Brain Charts for the Rhesus Macaque Lifespan. Neuroscience (2024).
+- Bethlehem, R. A. I. et al. Brain charts for the human lifespan. Nature 604, 525–533 (2022).
+- Alldritt, S. et al. Brain Charts for the Rhesus Macaque Lifespan. Neuroscience (2024).
 
 
 
